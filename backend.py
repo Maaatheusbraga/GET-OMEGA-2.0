@@ -32,6 +32,7 @@ async def generate_base(request: dict):
         pid = request.get('procedureId', '').strip()
         user = str(request.get('userName', 'Analista')).replace("'", "")
         reg = request.get('reg', '').strip()
+        xml_f = request.get('xmlFilters', {}) 
         
         # Datas formatadas para o padrão SQL brasileiro
         raw_i = p.get('p_periodo_i') or p.get('data_inicio')
@@ -45,12 +46,25 @@ async def generate_base(request: dict):
         prefix = "SET NOCOUNT ON; SET DATEFORMAT dmy; "
         sql_exec, sql_select = "", ""
 
-        # --- BLOCO 1000 (AJUSTADO CONFORME SUA DEFINIÇÃO) ---
-        if pid == 'bloco_1000':
-            # Argumentos exatos: @p_cnpj, @p_periodo_i, @p_periodo_f, @p_usuario
-            sql_exec = f"EXEC PROC_REL_CONTRIBUICOES_GERADOR '{cnpj}', '{dt_i}', '{dt_f}', '{user}'"
+        # --- BLOCO XML INSERIDO AQUI ---
+        if pid == 'base_xml':
+            tipo_xml = xml_f.get('tipo', 'entrada_saida')
+            emit_xml = xml_f.get('emitente', 'proprios')
+            where = f"id_cliente = {cli_id_int} AND xmotivo = 'Autorizado o uso da NF-e' AND CAST(periodo AS DATE) BETWEEN '{dt_i}' AND '{dt_f}'"
             
-            # Selects usando APENAS CNPJ para filtrar
+            if emit_xml == 'terceiros':
+                where += " AND IND_EMIT = '1'"
+            else:
+                where += " AND IND_EMIT = '0'"
+                if tipo_xml == 'entrada': where += " AND Tipo = '0'"
+                elif tipo_xml == 'saida': where += " AND Tipo = '1'"
+            
+            cols = "id_cliente, cast(periodo as date) as 'periodo', modelo, serie, numero, data_emissao, data_ent_said, ind_emit, tipo, finalidade, cnpj_empresa, ie_empresa, nome_empresa, cnpj_part, ie_part, nome_part, uf_part, cod_mun_part, totais_vnf, totais_nbc, totais_nicms, totais_vpis, TOTAIS_vCOFINS, totais_vipi, TOTAIS_vII, totais_vdesc, totais_vseg, totais_vfrete, totais_vprod, totais_vbcst, totais_vst, totais_voutro, di_numero, di_data, numitem, codproduto, descproduto, infadprod, ncm, cfop, unid, qntd, valcontabil, valprod, valunit, valdesc, valfrete, valseg, valoutros, valII, cofins_cst, cofins_bc, cofins_val, cofins_aliq, pis_cst, pis_bc, pis_val, pis_aliq, ipi_cst, ipi_vipi, ipi_cenq, ipi_cnpjprod, ipi_clEnq, icms_cst, icms_bc, icms_val, icms_aliq, icms_predbc, icms_st_bc, icms_st_val, icms_st_aliq, icms_st_predbc, icms_st_ret_bc, icms_st_ret_val, icms_deson, infCpl, chave, xmotivo, observacao, ean, ean_trib, desc_finalidade, chassi, natureza_operacao, infad_fisco, codigo_participante, cprod_anvisa, bc_ipi, aliq_ipi, vl_bc_fcp_normal, per_fcp_normal, vl_fcp_normal, vl_bc_fcp_st, per_fcp_st, vl_fcp_st, mod_frete, desc_frete, IVA_ST, CST_IBS_CBS, COD_CLASS_TRIB_IBS_CBS, DESC_CLASS_IBS_CBS, BASE_CALCULO_IBS_CBS, ALIQUOTA_IBS_ESTADUAL, VALOR_IBS_ESTADUAL, ALIQUOTA_IBS_MUNICIPAL, VALOR_IBS_MUNICIPAL, VALOR_IBS_TOTAL, ALIQUOTA_CBS, VALOR_CBS"
+            sql_select = f"SELECT {cols} FROM TBL_XML WITH(NOLOCK) WHERE {where} ORDER BY periodo, numero"
+
+        # --- BLOCO 1000 (AJUSTADO CONFORME SUA DEFINIÇÃO) ---
+        elif pid == 'bloco_1000':
+            sql_exec = f"EXEC PROC_REL_CONTRIBUICOES_GERADOR '{cnpj}', '{dt_i}', '{dt_f}', '{user}'"
             if reg in ['1100', '1500']:
                 sql_select = f"SELECT * FROM TBL_EFD_CONT_{reg} WHERE CNPJ = '{cnpj}' AND CAST(PERIODO AS DATE) BETWEEN '{dt_i}' AND '{dt_f}' ORDER BY CAST(PERIODO AS DATE)"
             elif reg in ['1300', '1700']:

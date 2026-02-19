@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, LogOut, ChevronRight, FileSpreadsheet, ArrowLeft, Moon, Sun, Database, Layers, TableProperties, Box, ClipboardList, CheckCircle2 } from 'lucide-react';
+import { Search, LogOut, ChevronRight, FileSpreadsheet, ArrowLeft, Moon, Sun, Database, Layers, TableProperties, Box, ClipboardList, CheckCircle2, FileCode } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 const PROCEDURES_CONFIG = [
@@ -7,7 +7,8 @@ const PROCEDURES_CONFIG = [
   { id: 'efd_contribuicoes', title: 'EFD CONTRIBUIÇÕES', icon: <Layers size={28}/>, multiSelect: true, params: [{name:'p_cliente', label:'ID Cliente'}, {name:'p_cnpj', label:'CNPJ'}, {name:'p_periodo_i', label:'Início', type:'date'}, {name:'p_periodo_f', label:'Fim', type:'date'}] },
   { id: 'efd_bloco_m', title: 'EFD BLOCO M', icon: <TableProperties size={28}/>, noPreview: true, params: [{name:'p_cnpj', label:'CNPJ'}, {name:'p_periodo_i', label:'Início', type:'date'}, {name:'p_periodo_f', label:'Fim', type:'date'}] },
   { id: 'bloco_d', title: 'BLOCO D', icon: <Box size={28}/>, multiSelect: true, params: [{name:'p_cliente', label:'ID Cliente'}, {name:'p_periodo_i', label:'Início', type:'date'}, {name:'p_periodo_f', label:'Fim', type:'date'}] },
-  { id: 'bloco_1000', title: 'BLOCO 1000', icon: <Database size={28}/>, multiSelect: true, params: [{name:'p_cnpj', label:'CNPJ'}, {name:'p_periodo_i', label:'Início', type:'date'}, {name:'p_periodo_f', label:'Fim', type:'date'}] }
+  { id: 'bloco_1000', title: 'BLOCO 1000', icon: <Database size={28}/>, multiSelect: true, params: [{name:'p_cnpj', label:'CNPJ'}, {name:'p_cliente', label:'ID Cliente'}, {name:'p_periodo_i', label:'Início', type:'date'}, {name:'p_periodo_f', label:'Fim', type:'date'}] },
+  { id: 'base_xml', title: 'BASE XML', icon: <FileCode size={28}/>, isSpecial: true, params: [{name:'p_cliente', label:'ID Cliente'}, {name:'p_periodo_i', label:'Início', type:'date'}, {name:'p_periodo_f', label:'Fim', type:'date'}] }
 ];
 
 const REG_OPTIONS = {
@@ -28,6 +29,11 @@ export default function App() {
   const [dbClients, setDbClients] = useState([]);
   const [results, setResults] = useState([]); 
   const [regFilter, setRegFilter] = useState('');
+  
+  // States do BASE XML
+  const [xmlType, setXmlType] = useState('entrada_saida');
+  const [xmlEmit, setXmlEmit] = useState('proprios');
+  
   const [analistaName, setAnalistaName] = useState('');
 
   useEffect(() => {
@@ -42,7 +48,13 @@ export default function App() {
       const res = await fetch('http://localhost:3001/api/generate-base', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ procedureId: selectedProc.id, params: formValues, reg: regFilter, userName: user?.name })
+        body: JSON.stringify({ 
+            procedureId: selectedProc.id, 
+            params: formValues, 
+            reg: regFilter,
+            xmlFilters: { tipo: xmlType, emitente: xmlEmit },
+            userName: user?.name 
+        })
       });
       const json = await res.json();
       if (json.success) { setResults(json.data); setView('results'); }
@@ -52,7 +64,7 @@ export default function App() {
   };
 
   const selectClient = (c) => {
-    setFormValues({ ...formValues, p_cliente: c.id_cliente, p_cnpj: c.cnpj, id_cliente: c.id_cliente, p_cnpj: c.cnpj });
+    setFormValues({ ...formValues, p_cliente: c.id_cliente, p_cnpj: c.cnpj, id_cliente: c.id_cliente });
     setIsConsultOpen(false);
   };
 
@@ -125,6 +137,44 @@ export default function App() {
                          <input type={p.type || 'text'} className="p-4 rounded-xl bg-slate-800 border border-white/10 outline-none font-bold text-white" value={formValues[p.name] || ''} onChange={e => setFormValues({...formValues, [p.name]: e.target.value})} />
                       </div>
                    ))}
+
+                   {/* INSERÇÃO DO FORMULARIO XML CONFORME IMAGEM */}
+                   {selectedProc.isSpecial && (
+                      <div className="col-span-2 flex flex-col gap-6">
+                         <fieldset className={`border border-white/40 p-5 rounded-lg relative ${xmlEmit === 'terceiros' ? 'opacity-30 pointer-events-none' : ''}`}>
+                            <legend className="text-[11px] font-mono tracking-widest px-2 text-white/80">TIPO</legend>
+                            <div className="flex flex-col gap-3 ml-2">
+                               <label className="flex items-center gap-3 cursor-pointer text-xs font-mono tracking-tight text-white">
+                                  <input type="radio" name="xmlType" value="entrada" checked={xmlType === 'entrada'} onChange={() => setXmlType('entrada')} className="w-4 h-4 cursor-pointer accent-white" />
+                                  ENTRADA
+                               </label>
+                               <label className="flex items-center gap-3 cursor-pointer text-xs font-mono tracking-tight text-white">
+                                  <input type="radio" name="xmlType" value="saida" checked={xmlType === 'saida'} onChange={() => setXmlType('saida')} className="w-4 h-4 cursor-pointer accent-white" />
+                                  SAÍDA
+                               </label>
+                               <label className="flex items-center gap-3 cursor-pointer text-xs font-mono tracking-tight text-white">
+                                  <input type="radio" name="xmlType" value="entrada_saida" checked={xmlType === 'entrada_saida'} onChange={() => setXmlType('entrada_saida')} className="w-4 h-4 cursor-pointer accent-white" />
+                                  ENTRADA E SAÍDA
+                               </label>
+                            </div>
+                         </fieldset>
+                         
+                         <fieldset className="border border-white/40 p-5 rounded-lg relative">
+                            <legend className="text-[11px] font-mono tracking-widest px-2 text-white/80">EMITENTE</legend>
+                            <div className="flex flex-col gap-3 ml-2">
+                               <label className="flex items-center gap-3 cursor-pointer text-xs font-mono tracking-tight text-white">
+                                  <input type="radio" name="xmlEmit" value="proprios" checked={xmlEmit === 'proprios'} onChange={() => setXmlEmit('proprios')} className="w-4 h-4 cursor-pointer accent-white" />
+                                  PRÓPRIOS
+                               </label>
+                               <label className="flex items-center gap-3 cursor-pointer text-xs font-mono tracking-tight text-white">
+                                  <input type="radio" name="xmlEmit" value="terceiros" checked={xmlEmit === 'terceiros'} onChange={() => setXmlEmit('terceiros')} className="w-4 h-4 cursor-pointer accent-white" />
+                                  TERCEIROS
+                               </label>
+                            </div>
+                         </fieldset>
+                      </div>
+                   )}
+
                    {selectedProc.multiSelect && (
                       <div className="col-span-2 flex flex-col gap-2">
                          <label className="text-[10px] uppercase opacity-40 ml-2 font-black italic text-purple-400">Escolher Registro (REG)</label>
@@ -147,7 +197,14 @@ export default function App() {
                 <button onClick={() => setView('params')} className="text-xs uppercase text-purple-500 font-black italic flex items-center gap-2 hover:opacity-50 font-mono"><ArrowLeft size={18}/> Filtros</button>
                 <button onClick={() => {
                    const wb = XLSX.utils.book_new();
-                   results.forEach(t => XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(t.full), t.name.substring(0,31)));
+                   results.forEach((t, i) => {
+                       // O único tratamento feito foi aqui para impedir que o Excel trave com nomes repetidos (problema relatado no Fiscal)
+                       let sheetName = t.name ? t.name.substring(0, 31) : `Aba_${i + 1}`;
+                       if (wb.SheetNames.includes(sheetName)) {
+                           sheetName = `${sheetName}_${i + 1}`.substring(0, 31);
+                       }
+                       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(t.full), sheetName);
+                   });
                    XLSX.writeFile(wb, `GET OMEGA - ${formValues.p_cnpj} - ${selectedProc.title}.xlsx`);
                 }} className="px-10 py-5 bg-green-600 text-white rounded-2xl shadow-xl uppercase text-xs font-black italic flex items-center gap-3 font-mono transition-all active:scale-95"><FileSpreadsheet size={20}/> Baixar Excel</button>
              </div>
@@ -160,7 +217,7 @@ export default function App() {
              ) : results.map((t, i) => (
                 <div key={i} className={`p-8 rounded-[2.5rem] border shadow-2xl ${darkMode ? 'bg-slate-900 border-white/10' : 'bg-white'}`}>
                    <h3 className="text-xl font-black italic text-purple-500 mb-6 uppercase border-l-4 border-purple-500 pl-4 font-mono">{t.name}</h3>
-                   <div className="overflow-x-auto custom-scrollbar"><table className="w-full text-left text-[10px] border-collapse font-mono italic opacity-80"><thead><tr className="opacity-40 uppercase border-b">{Object.keys(t.preview[0] || {}).map(k => <th key={k} className="p-4">{k}</th>)}</tr></thead><tbody className="divide-y">{t.preview.map((r, ri) => <tr key={ri}>{Object.values(r).map((v, vi) => <td key={vi} className="p-4">{v === null ? '-' : v.toString()}</td>)}</tr>)}</tbody></table></div>
+                   <div className="overflow-x-auto custom-scrollbar"><table className="w-full text-left text-[10px] border-collapse font-mono italic opacity-80"><thead><tr className="opacity-40 uppercase border-b">{Object.keys(t.preview[0] || {}).map(k => <th key={k} className="p-4 whitespace-nowrap">{k}</th>)}</tr></thead><tbody className="divide-y">{t.preview.map((r, ri) => <tr key={ri}>{Object.values(r).map((v, vi) => <td key={vi} className="p-4 whitespace-nowrap">{v === null ? '-' : v.toString()}</td>)}</tr>)}</tbody></table></div>
                 </div>
              ))}
           </div>
