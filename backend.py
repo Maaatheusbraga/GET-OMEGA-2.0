@@ -21,6 +21,19 @@ DB_CONFIG = (
     "TrustServerCertificate=yes;"
 )
 
+# Função auxiliar para blindar a conversão para número
+def to_float(v):
+    if v is None or v == "": return 0.0
+    try:
+        sv = str(v).strip()
+        if '.' in sv and ',' in sv:
+            sv = sv.replace('.', '').replace(',', '.')
+        else:
+            sv = sv.replace(',', '.')
+        return float(sv)
+    except:
+        return v
+
 @app.post("/api/generate-base")
 async def generate_base(request: dict):
     conn = None
@@ -34,7 +47,6 @@ async def generate_base(request: dict):
         reg = request.get('reg', '').strip()
         xml_f = request.get('xmlFilters', {}) 
         
-        # Datas formatadas para o padrão SQL brasileiro
         raw_i = p.get('p_periodo_i') or p.get('data_inicio')
         raw_f = p.get('p_periodo_f') or p.get('data_fim')
         dt_i = datetime.strptime(raw_i, '%Y-%m-%d').strftime('%d/%m/%Y')
@@ -46,7 +58,7 @@ async def generate_base(request: dict):
         prefix = "SET NOCOUNT ON; SET DATEFORMAT dmy; "
         sql_exec, sql_select = "", ""
 
-        # --- NOVO: CRÉDITO GERADO (Apenas Select direto) ---
+        # --- SEUS CARDS HOMOLOGADOS ---
         if pid == 'credito_gerado':
             sql_exec = ""
             sql_select = f"""
@@ -71,7 +83,6 @@ async def generate_base(request: dict):
             ORDER BY CAST(a.periodo_arq as date),a.reg
             """
 
-        # --- DEMAIS CARDS HOMOLOGADOS (INTACTOS) ---
         elif pid == 'bloco_ipi':
             sql_exec = f"EXEC PROC_EXPORT_E510_E520_GERADOR @p_cliente={cli_id_int}, @p_periodo_i='{dt_i}', @p_periodo_f='{dt_f}', @p_usuario='{user}'"
 
@@ -97,37 +108,34 @@ async def generate_base(request: dict):
             tipo_xml = xml_f.get('tipo', 'entrada_saida')
             emit_xml = xml_f.get('emitente', 'proprios')
             where = f"id_cliente = {cli_id_int} AND xmotivo = 'Autorizado o uso da NF-e' AND CAST(periodo AS DATE) BETWEEN '{dt_i}' AND '{dt_f}'"
-            
-            if emit_xml == 'terceiros':
-                where += " AND IND_EMIT = '1'"
+            if emit_xml == 'terceiros': where += " AND IND_EMIT = '1'"
             else:
                 where += " AND IND_EMIT = '0'"
                 if tipo_xml == 'entrada': where += " AND Tipo = '0'"
                 elif tipo_xml == 'saida': where += " AND Tipo = '1'"
-            
             cols = "id_cliente, cast(periodo as date) as 'periodo', modelo, serie, numero, data_emissao, data_ent_said, ind_emit, tipo, finalidade, cnpj_empresa, ie_empresa, nome_empresa, cnpj_part, ie_part, nome_part, uf_part, cod_mun_part, totais_vnf, totais_nbc, totais_nicms, totais_vpis, TOTAIS_vCOFINS, totais_vipi, TOTAIS_vII, totais_vdesc, totais_vseg, totais_vfrete, totais_vprod, totais_vbcst, totais_vst, totais_voutro, di_numero, di_data, numitem, codproduto, descproduto, infadprod, ncm, cfop, unid, qntd, valcontabil, valprod, valunit, valdesc, valfrete, valseg, valoutros, valII, cofins_cst, cofins_bc, cofins_val, cofins_aliq, pis_cst, pis_bc, pis_val, pis_aliq, ipi_cst, ipi_vipi, ipi_cenq, ipi_cnpjprod, ipi_clEnq, icms_cst, icms_bc, icms_val, icms_aliq, icms_predbc, icms_st_bc, icms_st_val, icms_st_aliq, icms_st_predbc, icms_st_ret_bc, icms_st_ret_val, icms_deson, infCpl, chave, xmotivo, observacao, ean, ean_trib, desc_finalidade, chassi, natureza_operacao, infad_fisco, codigo_participante, cprod_anvisa, bc_ipi, aliq_ipi, vl_bc_fcp_normal, per_fcp_normal, vl_fcp_normal, vl_bc_fcp_st, per_fcp_st, vl_fcp_st, mod_frete, desc_frete, IVA_ST, CST_IBS_CBS, COD_CLASS_TRIB_IBS_CBS, DESC_CLASS_IBS_CBS, BASE_CALCULO_IBS_CBS, ALIQUOTA_IBS_ESTADUAL, VALOR_IBS_ESTADUAL, ALIQUOTA_IBS_MUNICIPAL, VALOR_IBS_MUNICIPAL, VALOR_IBS_TOTAL, ALIQUOTA_CBS, VALOR_CBS"
             sql_select = f"SELECT {cols} FROM TBL_XML WITH(NOLOCK) WHERE {where} ORDER BY periodo, numero"
 
         elif pid == 'bloco_1000':
             sql_exec = f"EXEC PROC_REL_CONTRIBUICOES_GERADOR '{cnpj}', '{dt_i}', '{dt_f}', '{user}'"
-            if reg in ['1100', '1500']:
-                sql_select = f"SELECT * FROM TBL_EFD_CONT_{reg} WHERE CNPJ = '{cnpj}' AND CAST(PERIODO AS DATE) BETWEEN '{dt_i}' AND '{dt_f}' ORDER BY CAST(PERIODO AS DATE)"
-            elif reg in ['1300', '1700']:
-                sql_select = f"SELECT * FROM TBL_EFD_CONT_{reg} WHERE CNPJ = '{cnpj}' AND TRY_CAST(PERIODO AS DATE) BETWEEN '{dt_i}' AND '{dt_f}' ORDER BY TRY_CAST(PERIODO AS DATE)"
+            if reg in ['1100', '1500']: sql_select = f"SELECT * FROM TBL_EFD_CONT_{reg} WHERE CNPJ = '{cnpj}' AND CAST(PERIODO AS DATE) BETWEEN '{dt_i}' AND '{dt_f}' ORDER BY CAST(PERIODO AS DATE)"
+            elif reg in ['1300', '1700']: sql_select = f"SELECT * FROM TBL_EFD_CONT_{reg} WHERE CNPJ = '{cnpj}' AND TRY_CAST(PERIODO AS DATE) BETWEEN '{dt_i}' AND '{dt_f}' ORDER BY TRY_CAST(PERIODO AS DATE)"
 
         elif pid == 'efd_fiscal':
             sql_exec = f"EXEC PROC_GERAR_EFD_FISCAL_GERADOR {cli_id_int}, '{cnpj}', '{dt_i}', '{dt_f}', '{user}'"
+            
         elif pid == 'efd_contribuicoes':
             sql_exec = f"EXEC PROC_GER_EFD_CONTR_GERADOR {cli_id_int}, '{cnpj}', '{dt_i}', '{dt_f}', '{user}'"
             if reg: sql_select = f"SELECT * FROM TBL_EFD_CONT_{reg} WHERE ID_CLIENTE={cli_id_int} AND CAST(PERIODO AS DATE) BETWEEN '{dt_i}' AND '{dt_f}'"
+            
         elif pid == 'efd_bloco_m':
             sql_exec = f"EXEC PROC_REL_CONTRIBUICOES_BLOCO_M_GERADOR '{cnpj}', '{dt_i}', '{dt_f}', '{user}'"
+            
         elif pid == 'bloco_d':
             sql_exec = f"EXEC PROC_REL_CONTRIBUICOES_BLOCO_D_GERADOR {cli_id_int}, '{dt_i}', '{dt_f}', '{user}'"
             if reg: sql_select = f"SELECT * FROM TBL_EFD_CONT_{reg} WHERE ID_CLIENTE = {cli_id_int} AND CAST(PERIODO AS DATE) BETWEEN '{dt_i}' AND '{dt_f}'"
 
         if sql_exec:
-            print(f"\n[DEBUG] SQL EXEC: {prefix + sql_exec}")
             cursor.execute(prefix + sql_exec)
         
         all_tables = []
@@ -140,10 +148,81 @@ async def generate_base(request: dict):
                 continue
             cols_res = [col[0] for col in target.description]
             rows = target.fetchall()
-            clean_rows = [dict(zip(cols_res, [v.strftime('%d/%m/%Y') if isinstance(v, datetime) else v for v in r])) for r in rows]
+            clean_rows = []
             
-            # Tratamento de nome para não bugar o Excel
-            if pid == 'base_xml': nome_aba = "XML"
+            for r in rows:
+                row_dict = {}
+                for col_idx, col_name in enumerate(cols_res):
+                    val = r[col_idx]
+                    user_col = col_idx + 1 # Transforma em índice Base-1 
+
+                    if val is None:
+                        row_dict[col_name] = "-"
+                        continue
+
+                    # --- REGRAS ESPECÍFICAS DE FORMATAÇÃO ---
+                    if pid == 'efd_fiscal':
+                        if t_idx == 1:
+                            if user_col in [7, 8, 10, 11, 38, 74]: val = str(val) 
+                        elif t_idx == 2:
+                            if 7 <= user_col <= 13: val = str(val) 
+                            elif (26 <= user_col <= 37) or (40 <= user_col <= 46): val = to_float(val) 
+                        elif t_idx == 3:
+                            if (7 <= user_col <= 13) or user_col == 40: val = str(val) 
+                            elif 26 <= user_col <= 39: val = to_float(val) 
+                        elif t_idx == 4:
+                            if 7 <= user_col <= 13: val = str(val) 
+                            elif (24 <= user_col <= 33) or (36 <= user_col <= 42): val = to_float(val) 
+
+                    # REGRAS EFD CONTRIBUIÇÕES 
+                    elif pid == 'efd_contribuicoes':
+                        if reg == 'F525':
+                            if user_col in [5, 10]: val = to_float(val)
+                        elif reg == 'F550':
+                            if user_col == 7 or (9 <= user_col <= 12) or (14 <= user_col <= 17): val = to_float(val)
+                        elif reg == 'F600':
+                            if (8 <= user_col <= 9) or (13 <= user_col <= 14): val = to_float(val)
+                        elif reg == 'F700':
+                            if user_col in [8, 9]: val = to_float(val)
+
+                    # REGRAS BLOCO D
+                    elif pid == 'bloco_d':
+                        if reg == 'D200':
+                            if user_col == 16: val = to_float(val)
+                        elif reg in ['D201', 'D205']:
+                            if user_col in [7, 8, 10]: val = to_float(val)
+                            
+                    # REGRAS BLOCO 1000
+                    elif pid == 'bloco_1000':
+                        if reg in ['1100', '1500']:
+                            if 10 <= user_col <= 22: val = to_float(val)
+                        elif reg in ['1300', '1700']:
+                            if 8 <= user_col <= 12: val = to_float(val)
+
+                    # Formatação universal de Data
+                    if isinstance(val, datetime):
+                        val = val.strftime('%d/%m/%Y')
+                        
+                    row_dict[col_name] = val
+                    
+                clean_rows.append(row_dict)
+            
+            # Controle de nome de abas
+            if pid == 'efd_fiscal':
+                if t_idx == 1: nome_aba = "C170"
+                elif t_idx == 2: nome_aba = "C590"
+                elif t_idx == 3: nome_aba = "D190"
+                elif t_idx == 4: nome_aba = "D590"
+                else: nome_aba = f"EFD_T{t_idx}"
+            elif pid == 'efd_bloco_m':
+                bloco_m_abas = [
+                    "M200", "M200_M205", "M200_M210", "M600", "M600_M605", 
+                    "M600_M610", "M100", "M500", "M500_M110", "M500_M505", 
+                    "M500_M510", "M700", "M400", "M800", "M620"
+                ]
+                if t_idx <= len(bloco_m_abas): nome_aba = bloco_m_abas[t_idx - 1]
+                else: nome_aba = f"M_T{t_idx}"
+            elif pid == 'base_xml': nome_aba = "XML"
             elif pid == 'credito_gerado': nome_aba = "CREDITO_GERADO"
             elif pid == 'resumo_entrada_sped': nome_aba = "RESUMO_ENTRADA"
             elif pid == 'resumo_saida_sped': nome_aba = "RESUMO_SAIDA"

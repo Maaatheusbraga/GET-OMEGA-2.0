@@ -222,6 +222,7 @@ export default function App() {
                    <CheckCircle2 size={40} className="text-green-500 mx-auto mb-6" />
                    <h2 className="text-3xl font-black italic uppercase text-white mb-2 font-mono">Processamento Concluído!</h2>
                    <p className="text-slate-500 uppercase text-[10px] font-black tracking-widest italic font-mono">O arquivo está pronto para extração.</p>
+                   <p className="text-slate-500 uppercase text-[8px] font-black tracking-widest italic font-mono">Planilhas vazias não retornaram dados.</p>
                 </div>
              ) : results.map((t, i) => (
                 <div key={i} className={`p-8 rounded-[2.5rem] border shadow-2xl ${darkMode ? 'bg-slate-900 border-white/10' : 'bg-white'}`}>
