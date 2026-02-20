@@ -25,12 +25,13 @@ const REG_OPTIONS = {
 };
 
 export default function App() {
-  const [view, setView] = useState('login');
+  const savedUser = JSON.parse(localStorage.getItem('omega_user'));
   const [darkMode, setDarkMode] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [isConsultOpen, setIsConsultOpen] = useState(false);
   const [selectedProc, setSelectedProc] = useState(null);
-  const [user, setUser] = useState(null);
+  const [view, setView] = useState(savedUser ? 'dashboard' : 'login');
+  const [user, setUser] = useState(savedUser || null);
   const [formValues, setFormValues] = useState({});
   const [clientSearch, setClientSearch] = useState('');
   const [dbClients, setDbClients] = useState([]);
@@ -152,8 +153,11 @@ export default function App() {
         const json = await res.json();
         
         if (json.success) {
-            // Guardamos o nome E a permissão do usuário
-            setUser({name: json.user.name, permissao: json.user.permissao}); 
+            const userData = { name: json.user.name, permissao: json.user.permissao };
+            setUser(userData); 
+            // Guarda o crachá no cofre do navegador!
+            localStorage.setItem('omega_user', JSON.stringify(userData)); 
+            
             setView('dashboard'); 
             toast.success(`Bem-vindo de volta, ${json.user.name}!`, { id: loadingToast });
         } else {
@@ -203,7 +207,7 @@ export default function App() {
         <div className="flex items-center gap-4">
            <div className="text-right hidden sm:block"><div className="text-[10px] font-black uppercase text-purple-500">Analista</div><div className="text-xs font-bold italic">{user?.name}</div></div>
            <button onClick={() => setDarkMode(!darkMode)} className={`p-2.5 rounded-xl transition-all ${darkMode ? 'hover:bg-white/10' : 'hover:bg-black/5'}`}>{darkMode ? <Sun size={20} className="text-yellow-400" /> : <Moon size={20} />}</button>
-           <button onClick={() => { setView('login'); toast('Sessão encerrada.', { icon: '👋' }); }} className="p-3 hover:text-red-500 transition-colors"><LogOut size={20}/></button>
+           <button onClick={() => {localStorage.removeItem('omega_user');setUser(null);setView('login'); toast('Sessão encerrada.', { icon: '👋' }); }} className="p-3 hover:text-red-500 transition-colors"><LogOut size={20}/></button>
         </div>
       </header>
 
