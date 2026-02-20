@@ -4,7 +4,7 @@ from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import pyodbc
-from datetime import datetime
+from datetime import datetime, date  # <-- ADICIONADO O 'date' AQUI
 import xlsxwriter
 
 app = FastAPI(title="GET OMEGA 2.0")
@@ -101,6 +101,13 @@ def get_sql(pid, cli_id_int, dt_i, dt_f, cnpj, user, reg, xml_f):
 def format_value(pid, t_idx, reg, user_col, val):
     if val is None: return "-"
     
+    # ---------------------------------------------------------------------------------
+    # MÁGICA GLOBAL DE DATAS (Resolve o problema do "45658" no Excel)
+    # Se a variável for datetime OU date puro, transforma em string legível na hora.
+    # ---------------------------------------------------------------------------------
+    if isinstance(val, (datetime, date)):
+        val = val.strftime('%d/%m/%Y')
+        
     if pid == 'efd_fiscal':
         if t_idx == 1 and user_col in [7, 8, 10, 11, 38, 74]: val = str(val) 
         elif t_idx == 2:
@@ -124,12 +131,11 @@ def format_value(pid, t_idx, reg, user_col, val):
         if reg in ['1100', '1500'] and 10 <= user_col <= 22: val = to_float(val)
         elif reg in ['1300', '1700'] and 8 <= user_col <= 12: val = to_float(val)
     elif pid == 'resumo_entrada_sped':
-        if user_col in [22, 24, 25, 26, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 42, 43, 44, 45, 46, 47, 48, 49]: val = to_float(val)
+        if user_col in [22, 24, 25, 26, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 42, 43, 44, 45, 46, 47, 48, 49 ]: val = to_float(val)
     elif pid == 'resumo_saida_sped':
         if user_col in [17, 19, 20, 21, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39]: val = to_float(val)
-
-    if isinstance(val, datetime):
-        val = val.strftime('%d/%m/%Y')
+    elif pid == 'bloco_e':
+        if user_col == 2: val = str(val) # Força texto na coluna 2 caso fuja do tratamento global
         
     return val
 
@@ -162,6 +168,7 @@ def get_tab_name(pid, t_idx, reg):
     elif reg: return reg
     else: return f"Tabela_{t_idx}"
 
+
 # =====================================================================
 # ROTA DE AUTENTICAÇÃO (LOGIN REAL)
 # =====================================================================
@@ -175,21 +182,19 @@ async def login(request: dict):
         conn = pyodbc.connect(DB_CONFIG)
         cursor = conn.cursor()
         
-        # Query parametrizada para evitar SQL Injection (Segurança)
         query = "SELECT Login FROM TBL_USUARIO WHERE Login = ? AND senha = ?"
         cursor.execute(query, (username, password))
         row = cursor.fetchone()
 
         if row:
-            # Encontrou o usuário com a senha correta
             return {"success": True, "user": {"name": row[0]}}
         else:
-            # Não encontrou (credenciais inválidas)
             return {"success": False, "error": "Usuário ou senha incorretos."}
     except Exception as e:
         return {"success": False, "error": f"Erro no banco de dados: {str(e)}"}
     finally:
         if conn: conn.close()
+
 
 # =====================================================================
 # ROTA 1: PREVIEW RÁPIDO (Traz apenas 50 linhas)
@@ -263,14 +268,10 @@ async def download_excel(request: dict, background_tasks: BackgroundTasks):
         if sql_exec: cursor.execute(prefix + sql_exec)
         target = cursor.execute(sql_select) if sql_select else cursor
 
-        # =====================================================================
-        # MÁGICA ENTERPRISE: Cria arquivo físico temporário com MEMÓRIA CONSTANTE
-        # =====================================================================
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
         
         wb = xlsxwriter.Workbook(tmp.name, {'constant_memory': True})
         
-        # Formatação do Cabeçalho
         header_format = wb.add_format({
             'bg_color': '#0B2447',
             'font_color': '#FFFFFF',
@@ -289,13 +290,11 @@ async def download_excel(request: dict, background_tasks: BackgroundTasks):
             ws = wb.add_worksheet(nome_aba[:31])
             cols_res = [col[0] for col in target.description]
             
-            # Escreve o Cabeçalho
             for col_num, col_name in enumerate(cols_res):
                 ws.write(0, col_num, col_name, header_format)
 
             col_widths = {i: len(str(col)) + 2 for i, col in enumerate(cols_res)}
 
-            # Fetch de 10.000 em 10.000 linhas diretamente no arquivo
             row_num = 1
             while True:
                 rows = target.fetchmany(10000)
@@ -308,30 +307,24 @@ async def download_excel(request: dict, background_tasks: BackgroundTasks):
                         val = format_value(pid, t_idx, reg, col_idx + 1, r[col_idx])
                         row_data.append(val)
                         
-                        # Limita o AutoFit às primeiras 500 linhas para economizar CPU
                         if row_num <= 500:
                             cell_len = len(str(val)) if val is not None else 1
                             if cell_len > col_widths[col_idx]:
                                 col_widths[col_idx] = cell_len
                     
-                    # Escreve a linha inteira de uma vez
                     ws.write_row(row_num, 0, row_data)
                     row_num += 1
 
-            # Aplica o AutoFit calculado
             for col_idx, width in col_widths.items():
                 ws.set_column(col_idx, col_idx, min(max(width, 12), 80))
 
             t_idx += 1
             if not target.nextset(): break
 
-        # Fecha o workbook para liberar o arquivo físico
         wb.close()
         
-        # Agenda a exclusão do arquivo para logo depois que o FileResponse entregar os dados
         background_tasks.add_task(remove_temp_file, tmp.name)
-        
-        filename = f"GET_OMEGA_Base_{cnpj or cli_id_int}.xlsx"
+        filename = f"GET OMEGA - {pid} - {cnpj or cli_id_int} - {dt_i} a {dt_f}.xlsx"
         
         return FileResponse(
             path=tmp.name, 

@@ -50,7 +50,7 @@ export default function App() {
 
   useEffect(() => {
     if (clientSearch.length > 2) {
-      fetch(`http://localhost:3001/api/clientes?search=${clientSearch}`).then(r => r.json()).then(d => setDbClients(d));
+      fetch(`http://192.168.2.189:3001/api/clientes?search=${clientSearch}`).then(r => r.json()).then(d => setDbClients(d));
     }
   }, [clientSearch]);
 
@@ -69,7 +69,7 @@ export default function App() {
 
     setIsLoading(true);
     try {
-      const res = await fetch('http://localhost:3001/api/generate-base', {
+      const res = await fetch('http://192.168.2.189:3001/api/generate-base', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -101,7 +101,7 @@ export default function App() {
   const exportToExcel = async () => {
     const loadingToast = toast.loading("Extraindo base completa no servidor (Aguarde o processamento)...");
     try {
-      const res = await fetch('http://localhost:3001/api/download-excel', {
+      const res = await fetch('http://192.168.2.189:3001/api/download-excel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -116,7 +116,12 @@ export default function App() {
       if (!res.ok) throw new Error("Erro ao gerar o arquivo no servidor.");
 
       const blob = await res.blob();
-      const fileName = `GET_OMEGA_Base_${formValues.p_cnpj || formValues.p_cliente}.xlsx`;
+      // Formata a data de AAAA-MM-DD para DD-MM-AAAA para o Windows aceitar
+      const dtI = formValues.p_periodo_i.split('-').reverse().join('-');
+      const dtF = formValues.p_periodo_f.split('-').reverse().join('-');
+      
+      // Monta o nome do arquivo exatamente como você pediu
+      const fileName = `GET OMEGA - ${selectedProc.title} - ${formValues.p_cnpj || formValues.p_cliente} - ${dtI} A ${dtF}.xlsx`;
       saveAs(blob, fileName);
       
       toast.success("Excel gerado e baixado com sucesso!", { id: loadingToast });
@@ -138,7 +143,7 @@ export default function App() {
     const loadingToast = toast.loading("Autenticando no banco de dados...");
     
     try {
-        const res = await fetch('http://localhost:3001/api/login', {
+        const res = await fetch('http://192.168.2.189:3001/api/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username: analistaName, password: password })
@@ -217,7 +222,7 @@ export default function App() {
       <main className="p-8 max-w-7xl mx-auto w-full flex-1 relative z-10">
         {view === 'dashboard' ? (
           <div className="animate-in fade-in duration-500">
-            <h1 className={`text-4xl font-black mb-10 italic uppercase font-mono tracking-tighter ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Módulos de Extração</h1>
+            <h1 className={`text-4xl font-black mb-10 italic uppercase font-mono tracking-tighter ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Selecione a base que deseja gerar:</h1>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                {PROCEDURES_CONFIG.map(p => (
                   <button key={p.id} onClick={() => { setSelectedProc(p); setView('params'); setRegFilter(''); }} 
