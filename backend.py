@@ -11,7 +11,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
+#CONFIGURAÇÃO DE CONEXÃO COM O BANCO DE DADOS - AJUSTE CONFORME SEU AMBIENTE
 DB_CONFIG = (
     "DRIVER={ODBC Driver 17 for SQL Server};"
     "SERVER=SRV-SISTEMA;"
@@ -34,6 +34,7 @@ def to_float(v):
     except:
         return v
 
+#CRIANDO PARAMETROS PARA RECEBER DO USUARIO E MANDAR PARA O BACKEND
 @app.post("/api/generate-base")
 async def generate_base(request: dict):
     conn = None
@@ -58,7 +59,7 @@ async def generate_base(request: dict):
         prefix = "SET NOCOUNT ON; SET DATEFORMAT dmy; "
         sql_exec, sql_select = "", ""
 
-        # --- SEUS CARDS HOMOLOGADOS ---
+        # --- DEFINIÇÃO DE PROCEDIMENTOS E CONSULTAS PARA CADA TIPO DE DADO SOLICITADO ---
         if pid == 'credito_gerado':
             sql_exec = ""
             sql_select = f"""
@@ -198,6 +199,12 @@ async def generate_base(request: dict):
                             if 10 <= user_col <= 22: val = to_float(val)
                         elif reg in ['1300', '1700']:
                             if 8 <= user_col <= 12: val = to_float(val)
+                    #REGRAS RESUMO ENTRADA SPED
+                    elif pid == 'resumo_entrada_sped':
+                        if user_col in [22, 24, 25, 26, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 42, 43, 44, 45, 46, 47, 48, 49 ]: val = to_float(val)
+                        
+                    elif pid == 'resumo_saida_sped':
+                        if user_col in [17, 19, 20, 21, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39]: val = to_float(val)
 
                     # Formatação universal de Data
                     if isinstance(val, datetime):
@@ -206,14 +213,18 @@ async def generate_base(request: dict):
                     row_dict[col_name] = val
                     
                 clean_rows.append(row_dict)
+
             
-            # Controle de nome de abas
+            # Nome da sheet de cada resultado - pode ser customizado por tipo de dado ou reg, ou seguir um padrão genérico
+
+            # EFD_FISCAL
             if pid == 'efd_fiscal':
                 if t_idx == 1: nome_aba = "C170"
                 elif t_idx == 2: nome_aba = "C590"
                 elif t_idx == 3: nome_aba = "D190"
                 elif t_idx == 4: nome_aba = "D590"
                 else: nome_aba = f"EFD_T{t_idx}"
+            #BLOCO M
             elif pid == 'efd_bloco_m':
                 bloco_m_abas = [
                     "M200", "M200_M205", "M200_M210", "M600", "M600_M605", 
@@ -222,15 +233,35 @@ async def generate_base(request: dict):
                 ]
                 if t_idx <= len(bloco_m_abas): nome_aba = bloco_m_abas[t_idx - 1]
                 else: nome_aba = f"M_T{t_idx}"
+
+             #BASE XML   
             elif pid == 'base_xml': nome_aba = "XML"
+
+            #CREDITO GERADO
             elif pid == 'credito_gerado': nome_aba = "CREDITO_GERADO"
+
+            #RESUMO DE ENTRADA NO SPED
             elif pid == 'resumo_entrada_sped': nome_aba = "RESUMO_ENTRADA"
+
+            #RESUMO DE SAIDA NO SPED
             elif pid == 'resumo_saida_sped': nome_aba = "RESUMO_SAIDA"
+
+            #RESUMO DE VALORES DO SPED
             elif pid == 'resumo_valores_sped': nome_aba = "RESUMO_VALORES"
-            elif pid == 'bloco_e': nome_aba = f"BLOCO_E_T{t_idx}"
-            elif pid == 'bloco_ipi': nome_aba = f"BLOCO_IPI_T{t_idx}"
-            elif reg: nome_aba = reg
-            else: nome_aba = f"Tabela_{t_idx}"
+
+            #BLOCO E
+            elif pid == 'bloco_e': 
+                if t_idx == 1: nome_aba = "E110"
+                elif t_idx == 2: nome_aba = "E111"
+                else: nome_aba = f"BLOCO_E_T{t_idx}"
+
+            #BLOCO IPI
+            elif pid == 'bloco_ipi': 
+               if t_idx == 1: nome_aba = "E510"
+               elif t_idx == 2: nome_aba = "E520"
+               elif t_idx == 3: nome_aba = "E530"
+               elif t_idx == 4: nome_aba = "E531"
+               else: nome_aba = f"BLOCO_IPI_T{t_idx}"
                 
             all_tables.append({"name": nome_aba, "preview": clean_rows[:20], "full": clean_rows})
             t_idx += 1

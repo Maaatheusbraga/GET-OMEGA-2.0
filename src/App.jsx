@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Search, LogOut, ChevronRight, FileSpreadsheet, ArrowLeft, Moon, Sun, Database, Layers, TableProperties, Box, ClipboardList, CheckCircle2, FileCode } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import * as ExcelJS from 'exceljs';
+import { saveAs } from 'file-saver';
+import toast, { Toaster } from 'react-hot-toast';
 
 const PROCEDURES_CONFIG = [
   { id: 'efd_fiscal', title: 'EFD FISCAL', icon: <ClipboardList size={28}/>, params: [{name:'p_cliente', label:'ID Cliente'}, {name:'p_cnpj', label:'CNPJ'}, {name:'p_periodo_i', label:'Início', type:'date'}, {name:'p_periodo_f', label:'Fim', type:'date'}] },
@@ -47,6 +49,20 @@ export default function App() {
   }, [clientSearch]);
 
   const handleGenerate = async () => {
+    // VALIDAÇÃO DINÂMICA: Exige que TODOS os campos daquele card específico estejam preenchidos
+    for (const param of selectedProc.params) {
+      if (!formValues[param.name] || formValues[param.name].toString().trim() === '') {
+        toast.error(`O campo "${param.label}" é de preenchimento obrigatório!`);
+        return;
+      }
+    }
+
+    // Se o card tem filtro de REG, ele também passa a ser obrigatório
+    if (selectedProc.multiSelect && !regFilter) {
+      toast.error("O campo 'Escolher Registro (REG)' é de preenchimento obrigatório!");
+      return;
+    }
+
     setIsLoading(true);
     try {
       const res = await fetch('http://localhost:3001/api/generate-base', {
@@ -61,26 +77,107 @@ export default function App() {
         })
       });
       const json = await res.json();
-      if (json.success) { setResults(json.data); setView('results'); }
-      else alert(json.error);
-    } catch { alert("Erro de conexão."); }
+      if (json.success) { 
+        setResults(json.data); 
+        setView('results'); 
+        toast.success("Base processada com sucesso!");
+      }
+      else {
+        toast.error("Erro do servidor: " + json.error);
+      }
+    } catch { 
+      toast.error("Erro de conexão com o servidor. Verifique se o backend está rodando."); 
+    }
     setIsLoading(false);
   };
 
   const selectClient = (c) => {
+    // Ao selecionar a empresa, preenchemos o ID e o CNPJ no state automaticamente
     setFormValues({ ...formValues, p_cliente: c.id_cliente, p_cnpj: c.cnpj, id_cliente: c.id_cliente });
     setIsConsultOpen(false);
+    toast.success(`Cliente ${c.nome} selecionado!`);
+  };
+
+  const exportToExcel = async () => {
+    try {
+      const wb = new ExcelJS.Workbook();
+      
+      results.forEach((t, i) => {
+        let sheetName = t.name ? t.name.substring(0, 31) : `Aba_${i + 1}`;
+        if (wb.worksheets.some(ws => ws.name === sheetName)) {
+           sheetName = `${sheetName}_${i + 1}`.substring(0, 31);
+        }
+        
+        const ws = wb.addWorksheet(sheetName);
+
+        if (t.full && t.full.length > 0) {
+          const headers = Object.keys(t.full[0]);
+          
+          ws.addRow(headers);
+          
+          const headerRow = ws.getRow(1);
+          headerRow.eachCell((cell) => {
+            cell.fill = {
+              type: 'pattern',
+              pattern: 'solid',
+              fgColor: { argb: 'FF0B2447' } 
+            };
+            cell.font = {
+              color: { argb: 'FFFFFFFF' }, 
+              bold: true,
+              name: 'Calibri',
+              size: 11
+            };
+            cell.alignment = { vertical: 'middle', horizontal: 'center' };
+          });
+
+          t.full.forEach(row => {
+            ws.addRow(Object.values(row));
+          });
+
+          ws.columns.forEach((column) => {
+            let maxLength = 0;
+            column.eachCell({ includeEmpty: true }, (cell) => {
+              const columnLength = cell.value ? cell.value.toString().length : 10;
+              if (columnLength > maxLength) {
+                maxLength = columnLength;
+              }
+            });
+            column.width = Math.min(Math.max(maxLength + 2, 12), 100); 
+          });
+        }
+      });
+
+      const buffer = await wb.xlsx.writeBuffer();
+      const fileName = `GET OMEGA - ${formValues.p_cnpj || formValues.p_cliente} - ${selectedProc.title}.xlsx`;
+      saveAs(new Blob([buffer]), fileName);
+      
+      toast.success("Excel exportado com sucesso!");
+
+    } catch (err) {
+      toast.error("Erro ao exportar Excel. Detalhes: " + err.message);
+    }
   };
 
   if (view === 'login') return (
     <div className={`min-h-screen flex items-center justify-center p-6 font-mono ${darkMode ? 'bg-slate-950' : 'bg-slate-100'}`}>
+      <Toaster position="top-right" toastOptions={{ style: { background: darkMode ? '#1e293b' : '#fff', color: darkMode ? '#fff' : '#000', border: '1px solid rgba(255,255,255,0.1)' } }} />
       <div className={`w-full max-w-md p-10 rounded-[3rem] border shadow-2xl ${darkMode ? 'bg-slate-900 border-white/10' : 'bg-white'}`}>
          <div className="flex justify-center mb-8"><img src="/omega.png" className="w-20 h-20" alt="Logo" /></div>
          <h1 className="text-3xl font-black mb-8 text-center text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-pink-500 uppercase italic">GET OMEGA 2.0</h1>
-         <form onSubmit={e => { e.preventDefault(); setUser({name: analistaName}); setView('dashboard'); }} className="space-y-6">
+         <form onSubmit={e => { 
+             e.preventDefault(); 
+             if(analistaName.trim() === '') {
+                 toast.error("Informe seu nome!");
+                 return;
+             }
+             setUser({name: analistaName}); 
+             setView('dashboard'); 
+             toast.success(`Bem-vindo, ${analistaName}!`);
+          }} className="space-y-6">
             <input type="text" placeholder="Nome do Analista" className="w-full py-4 px-6 rounded-2xl bg-slate-800 border-white/10 outline-none font-bold text-white" value={analistaName} onChange={e => setAnalistaName(e.target.value)} required />
             <input type="password" placeholder="Senha" className="w-full py-4 px-6 rounded-2xl bg-slate-800 border-white/10 outline-none font-bold text-white" required />
-            <button className="w-full py-5 rounded-2xl bg-gradient-to-r from-purple-600 to-pink-500 text-white font-black uppercase">Entrar</button>
+            <button className="w-full py-5 rounded-2xl bg-gradient-to-r from-purple-600 to-pink-500 text-white font-black uppercase shadow-xl hover:scale-[1.02] transition-transform">Entrar</button>
          </form>
       </div>
     </div>
@@ -88,6 +185,7 @@ export default function App() {
 
   return (
     <div className={`min-h-screen flex flex-col transition-all ${darkMode ? 'bg-[#0a0c10] text-white' : 'bg-slate-50 text-slate-900'}`}>
+      <Toaster position="top-right" toastOptions={{ style: { background: darkMode ? '#1e293b' : '#fff', color: darkMode ? '#fff' : '#000', border: '1px solid rgba(255,255,255,0.1)' } }} />
       <header className="px-8 py-4 border-b border-white/5 flex justify-between items-center backdrop-blur-xl sticky top-0 z-[100]">
         <div className="flex items-center gap-4 cursor-pointer" onClick={() => setView('dashboard')}>
           <div className="p-1.5 rounded-2xl bg-gradient-to-br from-purple-600 to-pink-500"><img src="/omega.png" className="w-10 h-10" alt="Logo" /></div>
@@ -96,7 +194,7 @@ export default function App() {
         <div className="flex items-center gap-4">
            <div className="text-right hidden sm:block"><div className="text-[10px] font-black uppercase text-purple-500">Analista</div><div className="text-xs font-bold italic">{user?.name}</div></div>
            <button onClick={() => setDarkMode(!darkMode)} className="p-2.5 rounded-xl hover:bg-white/10 transition-all">{darkMode ? <Sun size={20} className="text-yellow-400" /> : <Moon size={20} />}</button>
-           <button onClick={() => setView('login')} className="p-3 hover:text-red-500"><LogOut size={20}/></button>
+           <button onClick={() => { setView('login'); toast('Sessão encerrada.', { icon: '👋' }); }} className="p-3 hover:text-red-500"><LogOut size={20}/></button>
         </div>
       </header>
 
@@ -105,7 +203,7 @@ export default function App() {
           <div className={`w-full max-w-2xl rounded-[2.5rem] border p-8 shadow-2xl ${darkMode ? 'bg-slate-900 border-white/10' : 'bg-white'}`}>
              <h2 className="text-xl font-bold uppercase mb-6 font-mono text-purple-400 italic">Pesquisar Empresa</h2>
              <input type="text" placeholder="Nome ou CNPJ..." className="w-full py-4 px-6 rounded-2xl bg-slate-800 border border-white/10 font-bold outline-none text-white" value={clientSearch} onChange={e => setClientSearch(e.target.value)} autoFocus />
-             <div className="mt-4 space-y-2 max-h-64 overflow-y-auto">
+             <div className="mt-4 space-y-2 max-h-64 overflow-y-auto custom-scrollbar">
                 {dbClients.map(c => <button key={c.id_cliente} onClick={() => selectClient(c)} className={`w-full p-4 rounded-xl text-left font-bold border border-white/10 hover:bg-purple-600/20 transition-all font-mono`}><div>{c.nome}</div><div className="text-[10px] opacity-40 uppercase">ID: {c.id_cliente} | CNPJ: {c.cnpj}</div></button>)}
              </div>
              <button onClick={() => setIsConsultOpen(false)} className="mt-6 text-xs uppercase opacity-40">Fechar</button>
@@ -128,18 +226,18 @@ export default function App() {
             </div>
           </div>
         ) : view === 'params' ? (
-          <div className="max-w-4xl mx-auto">
+          <div className="max-w-4xl mx-auto animate-in fade-in zoom-in-95 duration-300">
              <div className={`p-10 rounded-[3.5rem] border shadow-2xl ${darkMode ? 'bg-slate-900 border-white/10' : 'bg-white'}`}>
                 <div className="flex justify-between items-center mb-10 border-b border-white/5 pb-6">
                    <h2 className="text-2xl font-black uppercase italic font-mono text-purple-500">{selectedProc.title}</h2>
-                   <button onClick={() => setIsConsultOpen(true)} className="px-5 py-2 bg-purple-600 text-white rounded-xl text-[10px] font-black uppercase flex items-center gap-2 font-mono shadow-lg"><Search size={14}/> Pesquisar Empresa</button>
+                   <button onClick={() => setIsConsultOpen(true)} className="px-5 py-2 bg-purple-600 text-white rounded-xl text-[10px] font-black uppercase flex items-center gap-2 font-mono shadow-lg hover:scale-105 transition-transform"><Search size={14}/> Pesquisar Empresa</button>
                 </div>
                 
                 <div className="grid grid-cols-2 gap-8 mb-10">
                    {selectedProc.params.map(p => (
                       <div key={p.name} className="flex flex-col gap-2">
                          <label className="text-[10px] uppercase opacity-40 ml-2 font-black italic">{p.label}</label>
-                         <input type={p.type || 'text'} className="p-4 rounded-xl bg-slate-800 border border-white/10 outline-none font-bold text-white" value={formValues[p.name] || ''} onChange={e => setFormValues({...formValues, [p.name]: e.target.value})} />
+                         <input type={p.type || 'text'} className="p-4 rounded-xl bg-slate-800 border border-white/10 outline-none font-bold text-white focus:border-purple-500 transition-colors" value={formValues[p.name] || ''} onChange={e => setFormValues({...formValues, [p.name]: e.target.value})} />
                       </div>
                    ))}
 
@@ -182,7 +280,7 @@ export default function App() {
                    {selectedProc.multiSelect && (
                       <div className="col-span-2 flex flex-col gap-2">
                          <label className="text-[10px] uppercase opacity-40 ml-2 font-black italic text-purple-400">Escolher Registro (REG)</label>
-                         <select className="p-4 rounded-xl bg-slate-800 border border-white/10 outline-none font-bold text-white appearance-none" value={regFilter} onChange={e => setRegFilter(e.target.value)}>
+                         <select className="p-4 rounded-xl bg-slate-800 border border-white/10 outline-none font-bold text-white appearance-none focus:border-purple-500 transition-colors" value={regFilter} onChange={e => setRegFilter(e.target.value)}>
                             <option value="">Selecione um registro...</option>
                             {REG_OPTIONS[selectedProc.id]?.map(opt => <option key={opt} value={opt} className="bg-slate-900">{opt}</option>)}
                          </select>
@@ -191,8 +289,8 @@ export default function App() {
                 </div>
                 
                 <div className="flex gap-4">
-                  <button onClick={() => setView('dashboard')} className="flex-1 py-5 border border-white/10 rounded-2xl font-black uppercase text-xs opacity-50 hover:opacity-100 font-mono">Voltar</button>
-                  <button onClick={handleGenerate} className="flex-[2] py-5 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-black uppercase tracking-widest shadow-xl font-mono">Gerar Base</button>
+                  <button onClick={() => setView('dashboard')} className="flex-1 py-5 border border-white/10 rounded-2xl font-black uppercase text-xs opacity-50 hover:opacity-100 font-mono transition-all">Voltar</button>
+                  <button onClick={handleGenerate} className="flex-[2] py-5 bg-gradient-to-r from-purple-600 to-pink-500 text-white font-black uppercase tracking-widest shadow-xl font-mono hover:scale-[1.02] transition-transform">Gerar Base</button>
                 </div>
              </div>
           </div>
@@ -200,21 +298,7 @@ export default function App() {
           <div className="space-y-8 animate-in fade-in duration-700">
              <div className="flex justify-between items-center">
                 <button onClick={() => setView('params')} className="text-xs uppercase text-purple-500 font-black italic flex items-center gap-2 hover:opacity-50 font-mono"><ArrowLeft size={18}/> Filtros</button>
-                <button onClick={() => {
-                   try {
-                       const wb = XLSX.utils.book_new();
-                       results.forEach((t, i) => {
-                           let sheetName = t.name ? t.name.substring(0, 31) : `Aba_${i + 1}`;
-                           if (wb.SheetNames.includes(sheetName)) {
-                               sheetName = `${sheetName}_${i + 1}`.substring(0, 31);
-                           }
-                           XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(t.full), sheetName);
-                       });
-                       XLSX.writeFile(wb, `GET OMEGA - ${formValues.p_cnpj || formValues.p_cliente} - ${selectedProc.title}.xlsx`);
-                   } catch (err) {
-                       alert("Erro ao exportar Excel. Detalhes: " + err.message);
-                   }
-                }} className="px-10 py-5 bg-green-600 text-white rounded-2xl shadow-xl uppercase text-xs font-black italic flex items-center gap-3 font-mono transition-all active:scale-95"><FileSpreadsheet size={20}/> Baixar Excel</button>
+                <button onClick={exportToExcel} className="px-10 py-5 bg-green-600 text-white rounded-2xl shadow-xl uppercase text-xs font-black italic flex items-center gap-3 font-mono transition-all hover:bg-green-500 active:scale-95"><FileSpreadsheet size={20}/> Baixar Excel</button>
              </div>
              
              {selectedProc.noPreview ? (
@@ -238,7 +322,7 @@ export default function App() {
         <div className="fixed inset-0 bg-slate-950/90 z-[200] flex flex-col items-center justify-center text-white backdrop-blur-md font-mono">
           <div className="relative mb-10">
             <div className="w-20 h-20 border-4 border-purple-500 border-t-transparent rounded-full animate-spin mb-6" />
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 font-black italic text-lg uppercase font-mono">Ω</div>
+            <div className="absolute top-1/2 left-1/2"><img src="/omega.png" className="w-10 h-10" alt="Logo" /></div>
           </div>
           <h2 className="text-3xl font-black italic uppercase font-mono tracking-tighter">Carregando Base...</h2>
         </div>
