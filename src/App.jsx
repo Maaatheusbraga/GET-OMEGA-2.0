@@ -7,7 +7,7 @@ const PROCEDURES_CONFIG = [
   { id: 'efd_fiscal', title: 'EFD FISCAL', icon: <ClipboardList size={28}/>, params: [{name:'p_cliente', label:'ID Cliente'}, {name:'p_cnpj', label:'CNPJ'}, {name:'p_periodo_i', label:'Início', type:'date'}, {name:'p_periodo_f', label:'Fim', type:'date'}] },
   { id: 'efd_contribuicoes', title: 'EFD CONTRIBUIÇÕES', icon: <Layers size={28}/>, multiSelect: true, params: [{name:'p_cliente', label:'ID Cliente'}, {name:'p_cnpj', label:'CNPJ'}, {name:'p_periodo_i', label:'Início', type:'date'}, {name:'p_periodo_f', label:'Fim', type:'date'}] },
   { id: 'efd_bloco_m', title: 'EFD BLOCO M', icon: <TableProperties size={28}/>, noPreview: true, params: [{name:'p_cnpj', label:'CNPJ'}, {name:'p_periodo_i', label:'Início', type:'date'}, {name:'p_periodo_f', label:'Fim', type:'date'}] },
-  { id: 'bloco_d', title: 'BLOCO D', icon: <Box size={28}/>, multiSelect: true, params: [{name:'p_cliente', label:'ID Cliente'}, {name:'p_cnpj', label:'CNPJ'}, {name:'p_periodo_i', label:'Início', type:'date'}, {name:'p_periodo_f', label:'Fim', type:'date'}] },
+  { id: 'bloco_d', title: 'BLOCO D', icon: <Box size={28}/>,  params: [{name:'p_cliente', label:'ID Cliente'}, {name:'p_cnpj', label:'CNPJ'}, {name:'p_periodo_i', label:'Início', type:'date'}, {name:'p_periodo_f', label:'Fim', type:'date'}] },
   { id: 'bloco_1000', title: 'BLOCO 1000', icon: <Database size={28}/>, multiSelect: true, params: [{name:'p_cnpj', label:'CNPJ'}, {name:'p_cliente', label:'ID Cliente'}, {name:'p_periodo_i', label:'Início', type:'date'}, {name:'p_periodo_f', label:'Fim', type:'date'}] },
   { id: 'base_xml', title: 'BASE XML', icon: <FileCode size={28}/>, isSpecial: true, params: [{name:'p_cliente', label:'ID Cliente'}, {name:'p_periodo_i', label:'Início', type:'date'}, {name:'p_periodo_f', label:'Fim', type:'date'}] },
   { id: 'resumo_entrada_sped', title: 'RESUMO ENTRADA SPED', icon: <FileSpreadsheet size={28}/>, params: [{name:'p_cliente', label:'ID Cliente'}, {name:'p_cnpj', label:'CNPJ'}, {name:'p_periodo_i', label:'Início', type:'date'}, {name:'p_periodo_f', label:'Fim', type:'date'}] },
@@ -20,7 +20,6 @@ const PROCEDURES_CONFIG = [
 
 const REG_OPTIONS = {
   efd_contribuicoes: ["A100", "C170", "C175", "C500", "D100", "D500", "F100", "F500", "F525", "F550", "F600", "F700"],
-  bloco_d: ["D200", "D201", "D205"],
   bloco_1000: ["1100", "1500", "1300", "1700"]
 };
 
@@ -98,7 +97,6 @@ export default function App() {
     toast.success(`Cliente ${c.nome} selecionado!`);
   };
 
-  // A MÁGICA CONTINUA: Acionamos a Rota 2 e baixamos o FileResponse!
   const exportToExcel = async () => {
     const loadingToast = toast.loading("Extraindo base completa no servidor (Aguarde o processamento)...");
     try {
@@ -114,15 +112,30 @@ export default function App() {
         })
       });
 
+      // Tratamento para não baixar erro em formato de Excel
+      const contentType = res.headers.get("content-type");
+      if (contentType && contentType.indexOf("application/json") !== -1) {
+          const errorJson = await res.json();
+          throw new Error(errorJson.error || "Erro desconhecido no servidor.");
+      }
+
       if (!res.ok) throw new Error("Erro ao gerar o arquivo no servidor.");
 
       const blob = await res.blob();
-      // Formata a data de AAAA-MM-DD para DD-MM-AAAA para o Windows aceitar
+      
       const dtI = formValues.p_periodo_i.split('-').reverse().join('-');
       const dtF = formValues.p_periodo_f.split('-').reverse().join('-');
       
-      // Monta o nome do arquivo exatamente como você pediu
-      const fileName = `GET OMEGA - ${selectedProc.title} - ${formValues.p_cnpj || formValues.p_cliente} - ${dtI} A ${dtF}.xlsx`;
+      // Lógica de nome dinâmico para REG e BASE XML
+      let extraPart = regFilter ? ` - ${regFilter}` : '';
+      
+      if (selectedProc.id === 'base_xml') {
+          const tipoTexto = xmlType === 'entrada_saida' ? 'ENTRADA E SAÍDA' : xmlType.toUpperCase();
+          const emitTexto = xmlEmit.toUpperCase();
+          extraPart = ` - ${tipoTexto} + ${emitTexto}`;
+      }
+      
+      const fileName = `GET OMEGA - ${selectedProc.title}${extraPart} - ${formValues.p_cnpj || formValues.p_cliente} - ${dtI} A ${dtF}.xlsx`;
       saveAs(blob, fileName);
       
       toast.success("Excel gerado e baixado com sucesso!", { id: loadingToast });
@@ -131,9 +144,6 @@ export default function App() {
     }
   };
 
-  // =====================================================================
-  // TELA DE LOGIN ATUALIZADA (LIGADA AO BANCO DE DADOS)
-  // =====================================================================
   const handleLogin = async (e) => {
     e.preventDefault(); 
     if(analistaName.trim() === '' || password.trim() === '') { 
@@ -155,7 +165,6 @@ export default function App() {
         if (json.success) {
             const userData = { name: json.user.name, permissao: json.user.permissao };
             setUser(userData); 
-            // Guarda o crachá no cofre do navegador!
             localStorage.setItem('omega_user', JSON.stringify(userData)); 
             
             setView('dashboard'); 
@@ -179,13 +188,11 @@ export default function App() {
       <div className={`w-full max-w-md p-10 rounded-[3rem] border shadow-2xl relative z-10 backdrop-blur-xl transition-colors duration-500 ${darkMode ? 'bg-slate-900/60 border-white/10' : 'bg-white/80 border-white/40'}`}>
          <div className="flex justify-center mb-8"><img src="/omega.png" className="w-40 h-40" alt="Logo" /></div>
        
-         
          <form onSubmit={handleLogin} className="space-y-6">
             <input type="text" placeholder="Usuário (Login)" className={inputClass} value={analistaName} onChange={e => setAnalistaName(e.target.value)} required />
             <input type="password" placeholder="Senha" className={inputClass} value={password} onChange={e => setPassword(e.target.value)} required />
             <button type="submit" className="w-full py-5 rounded-2xl bg-gradient-to-r from-purple-600 to-pink-500 text-white font-black uppercase shadow-xl hover:scale-[1.02] transition-transform">Entrar</button>
          </form>
-
       </div>
     </div>
   );
@@ -200,7 +207,7 @@ export default function App() {
 
       <Toaster position="top-right" toastOptions={{ style: { background: darkMode ? '#1e293b' : '#fff', color: darkMode ? '#fff' : '#000', border: '1px solid rgba(255,255,255,0.1)' } }} />
       <header className="px-8 py-4 border-b border-white/10 flex justify-between items-center backdrop-blur-2xl bg-white/5 sticky top-0 z-[100]">
-        <div className="flex items-center gap-4 cursor-pointer" onClick={() => setView('dashboard')}>
+        <div className="flex items-center gap-4 cursor-pointer" onClick={() => { setView('dashboard'); setSelectedProc(null); setFormValues({}); setRegFilter(''); }}>
           <div className="p-1.5 rounded-2xl bg-gradient-to-br from-purple-600 to-pink-500 shadow-lg shadow-purple-500/20"><img src="/omega.png" className="w-10 h-10" alt="Logo" /></div>
           <h2 className="text-sm font-black italic uppercase font-mono tracking-tighter">GET OMEGA <span className="text-purple-500">2.0</span></h2>
         </div>
@@ -287,7 +294,7 @@ export default function App() {
                    )}
                 </div>
                 <div className="flex gap-4">
-                  <button onClick={() => setView('dashboard')} className={`flex-1 py-5 border rounded-2xl font-black uppercase text-xs hover:opacity-100 font-mono transition-all ${darkMode ? 'border-white/10 hover:bg-white/5' : 'border-slate-300 hover:bg-slate-100'}`}>Voltar</button>
+                  <button onClick={() => { setView('dashboard'); setSelectedProc(null); setFormValues({}); setRegFilter(''); }} className={`flex-1 py-5 border rounded-2xl font-black uppercase text-xs hover:opacity-100 font-mono transition-all ${darkMode ? 'border-white/10 hover:bg-white/5' : 'border-slate-300 hover:bg-slate-100'}`}>Voltar</button>
                   <button onClick={handleGenerate} className="flex-[2] py-5 bg-gradient-to-r from-purple-600 to-pink-500 text-white rounded-2xl font-black uppercase tracking-widest shadow-xl shadow-purple-500/20 hover:shadow-purple-500/40 hover:scale-[1.02] transition-all font-mono">Gerar base</button>
                 </div>
              </div>

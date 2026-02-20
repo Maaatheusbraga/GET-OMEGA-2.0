@@ -4,7 +4,7 @@ from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import pyodbc
-from datetime import datetime, date  # <-- ADICIONADO O 'date' AQUI
+from datetime import datetime, date  
 import xlsxwriter
 
 app = FastAPI(title="GET OMEGA 2.0")
@@ -94,17 +94,13 @@ def get_sql(pid, cli_id_int, dt_i, dt_f, cnpj, user, reg, xml_f):
         sql_exec = f"EXEC PROC_REL_CONTRIBUICOES_BLOCO_M_GERADOR '{cnpj}', '{dt_i}', '{dt_f}', '{user}'"
     elif pid == 'bloco_d':
         sql_exec = f"EXEC PROC_REL_CONTRIBUICOES_BLOCO_D_GERADOR {cli_id_int}, '{dt_i}', '{dt_f}', '{user}'"
-        if reg: sql_select = f"SELECT * FROM TBL_EFD_CONT_{reg} WHERE ID_CLIENTE = {cli_id_int} AND CAST(PERIODO AS DATE) BETWEEN '{dt_i}' AND '{dt_f}'"
+        if reg: sql_select = ""
 
     return prefix, sql_exec, sql_select
 
 def format_value(pid, t_idx, reg, user_col, val):
     if val is None: return "-"
     
-    # ---------------------------------------------------------------------------------
-    # MÁGICA GLOBAL DE DATAS (Resolve o problema do "45658" no Excel)
-    # Se a variável for datetime OU date puro, transforma em string legível na hora.
-    # ---------------------------------------------------------------------------------
     if isinstance(val, (datetime, date)):
         val = val.strftime('%d/%m/%Y')
         
@@ -124,9 +120,11 @@ def format_value(pid, t_idx, reg, user_col, val):
         elif reg == 'F550' and (user_col == 7 or (9 <= user_col <= 12) or (14 <= user_col <= 17)): val = to_float(val)
         elif reg == 'F600' and ((8 <= user_col <= 9) or (13 <= user_col <= 14)): val = to_float(val)
         elif reg == 'F700' and user_col in [8, 9]: val = to_float(val)
+
     elif pid == 'bloco_d':
-        if reg == 'D200' and user_col == 16: val = to_float(val)
-        elif reg in ['D201', 'D205'] and user_col in [7, 8, 10]: val = to_float(val)
+        if t_idx == 1 and user_col == 16: val = to_float(val) 
+        elif t_idx in [2, 3] and user_col in [7, 8, 10]: val = to_float(val) 
+
     elif pid == 'bloco_1000':
         if reg in ['1100', '1500'] and 10 <= user_col <= 22: val = to_float(val)
         elif reg in ['1300', '1700'] and 8 <= user_col <= 12: val = to_float(val)
@@ -135,7 +133,7 @@ def format_value(pid, t_idx, reg, user_col, val):
     elif pid == 'resumo_saida_sped':
         if user_col in [17, 19, 20, 21, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39]: val = to_float(val)
     elif pid == 'bloco_e':
-        if user_col == 2: val = str(val) # Força texto na coluna 2 caso fuja do tratamento global
+        if user_col == 2: val = str(val) 
         
     return val
 
@@ -159,6 +157,13 @@ def get_tab_name(pid, t_idx, reg):
         if t_idx == 1: return "E110"
         elif t_idx == 2: return "E111"
         else: return f"BLOCO_E_T{t_idx}"
+
+    elif pid == 'bloco_d':
+        if t_idx == 1: return "D200"
+        elif t_idx == 2: return "D201"
+        elif t_idx == 3: return "D205"
+        else: return f"BLOCO_D_T{t_idx}"   
+
     elif pid == 'bloco_ipi': 
         if t_idx == 1: return "E510"
         elif t_idx == 2: return "E520"
@@ -169,12 +174,6 @@ def get_tab_name(pid, t_idx, reg):
     else: return f"Tabela_{t_idx}"
 
 
-# =====================================================================
-# ROTA DE AUTENTICAÇÃO (LOGIN REAL)
-# =====================================================================
-# =====================================================================
-# ROTA DE AUTENTICAÇÃO (LOGIN REAL)
-# =====================================================================
 @app.post("/api/login")
 async def login(request: dict):
     conn = None
@@ -185,13 +184,11 @@ async def login(request: dict):
         conn = pyodbc.connect(DB_CONFIG)
         cursor = conn.cursor()
         
-        
         query = "SELECT Login, permissao FROM TBL_USUARIO WHERE Login = ? AND senha = ?"
         cursor.execute(query, (username, password))
         row = cursor.fetchone()
 
         if row:
-            # Pega a permissão (row[1]). Se vier vazio do banco, assume 'normal'
             perm = str(row[1]).lower().strip() if row[1] else "normal"
             return {"success": True, "user": {"name": row[0], "permissao": perm}}
         else:
@@ -202,9 +199,6 @@ async def login(request: dict):
         if conn: conn.close()
 
 
-# =====================================================================
-# ROTA 1: PREVIEW RÁPIDO (Traz apenas 50 linhas)
-# =====================================================================
 @app.post("/api/generate-base")
 async def generate_base(request: dict):
     conn = None
@@ -231,7 +225,7 @@ async def generate_base(request: dict):
                 if not target.nextset(): break
                 continue
                 
-            cols_res = [col[0] for col in target.description]
+            cols_res = [col[0] if col[0] and str(col[0]).strip() != "" else f"COLUNA_{i+1}" for i, col in enumerate(target.description)]
             rows = target.fetchmany(50) 
             clean_rows = []
             
@@ -254,9 +248,6 @@ async def generate_base(request: dict):
         if conn: conn.close()
 
 
-# =====================================================================
-# ROTA 2: EXPORTAÇÃO TURBINADA COM XLSXWRITER E ARQUIVO TEMPORÁRIO
-# =====================================================================
 @app.post("/api/download-excel")
 async def download_excel(request: dict, background_tasks: BackgroundTasks):
     conn = None
@@ -294,8 +285,8 @@ async def download_excel(request: dict, background_tasks: BackgroundTasks):
                 
             nome_aba = get_tab_name(pid, t_idx, reg)
             ws = wb.add_worksheet(nome_aba[:31])
-            cols_res = [col[0] for col in target.description]
-            
+            cols_res = [col[0] if col[0] and str(col[0]).strip() != "" else f"COLUNA_{i+1}" for i, col in enumerate(target.description)]
+
             for col_num, col_name in enumerate(cols_res):
                 ws.write(0, col_num, col_name, header_format)
 
@@ -330,7 +321,22 @@ async def download_excel(request: dict, background_tasks: BackgroundTasks):
         wb.close()
         
         background_tasks.add_task(remove_temp_file, tmp.name)
-        filename = f"GET_OMEGA_Base_{cnpj or cli_id_int}.xlsx"
+        
+        dt_i_formatada = dt_i.replace('/', '-')
+        dt_f_formatada = dt_f.replace('/', '-')
+        nome_proc = pid.replace('_', ' ').upper()
+        
+        # Define a parte extra do nome (REG ou Filtros do XML)
+        extra_part = f" - {reg}" if reg and str(reg).strip() != "" else ""
+        
+        if pid == 'base_xml':
+            t_xml = xml_f.get('tipo', 'entrada_saida')
+            e_xml = xml_f.get('emitente', 'proprios')
+            tipo_texto = "ENTRADA E SAÍDA" if t_xml == 'entrada_saida' else t_xml.upper()
+            emit_texto = e_xml.upper()
+            extra_part = f" - {tipo_texto} + {emit_texto}"
+        
+        filename = f"GET OMEGA - {nome_proc}{extra_part} - {cnpj or cli_id_int} - {dt_i_formatada} A {dt_f_formatada}.xlsx"
         
         return FileResponse(
             path=tmp.name, 
