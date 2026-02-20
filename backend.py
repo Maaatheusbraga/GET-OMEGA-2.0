@@ -172,6 +172,9 @@ def get_tab_name(pid, t_idx, reg):
 # =====================================================================
 # ROTA DE AUTENTICAÇÃO (LOGIN REAL)
 # =====================================================================
+# =====================================================================
+# ROTA DE AUTENTICAÇÃO (LOGIN REAL)
+# =====================================================================
 @app.post("/api/login")
 async def login(request: dict):
     conn = None
@@ -182,12 +185,15 @@ async def login(request: dict):
         conn = pyodbc.connect(DB_CONFIG)
         cursor = conn.cursor()
         
-        query = "SELECT Login FROM TBL_USUARIO WHERE Login = ? AND senha = ?"
+        
+        query = "SELECT Login, permissao FROM TBL_USUARIO WHERE Login = ? AND senha = ?"
         cursor.execute(query, (username, password))
         row = cursor.fetchone()
 
         if row:
-            return {"success": True, "user": {"name": row[0]}}
+            # Pega a permissão (row[1]). Se vier vazio do banco, assume 'normal'
+            perm = str(row[1]).lower().strip() if row[1] else "normal"
+            return {"success": True, "user": {"name": row[0], "permissao": perm}}
         else:
             return {"success": False, "error": "Usuário ou senha incorretos."}
     except Exception as e:
@@ -324,7 +330,7 @@ async def download_excel(request: dict, background_tasks: BackgroundTasks):
         wb.close()
         
         background_tasks.add_task(remove_temp_file, tmp.name)
-        filename = f"GET OMEGA - {pid} - {cnpj or cli_id_int} - {dt_i} a {dt_f}.xlsx"
+        filename = f"GET_OMEGA_Base_{cnpj or cli_id_int}.xlsx"
         
         return FileResponse(
             path=tmp.name, 
