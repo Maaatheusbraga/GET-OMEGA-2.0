@@ -152,7 +152,8 @@ export default function App() {
         const json = await res.json();
         
         if (json.success) {
-            setUser({name: json.user.name}); 
+            // Guardamos o nome E a permissão do usuário
+            setUser({name: json.user.name, permissao: json.user.permissao}); 
             setView('dashboard'); 
             toast.success(`Bem-vindo de volta, ${json.user.name}!`, { id: loadingToast });
         } else {
@@ -224,7 +225,7 @@ export default function App() {
           <div className="animate-in fade-in duration-500">
             <h1 className={`text-4xl font-black mb-10 italic uppercase font-mono tracking-tighter ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Selecione a base que deseja gerar:</h1>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-               {PROCEDURES_CONFIG.map(p => (
+               {PROCEDURES_CONFIG.filter(p => p.id !== 'credito_gerado' || user?.permissao === 'alta').map(p => (
                   <button key={p.id} onClick={() => { setSelectedProc(p); setView('params'); setRegFilter(''); }} 
                     className={`p-8 rounded-[2.5rem] border text-left transition-all duration-300 group relative overflow-hidden backdrop-blur-sm 
                     ${darkMode 
@@ -283,7 +284,7 @@ export default function App() {
                 </div>
                 <div className="flex gap-4">
                   <button onClick={() => setView('dashboard')} className={`flex-1 py-5 border rounded-2xl font-black uppercase text-xs hover:opacity-100 font-mono transition-all ${darkMode ? 'border-white/10 hover:bg-white/5' : 'border-slate-300 hover:bg-slate-100'}`}>Voltar</button>
-                  <button onClick={handleGenerate} className="flex-[2] py-5 bg-gradient-to-r from-purple-600 to-pink-500 text-white rounded-2xl font-black uppercase tracking-widest shadow-xl shadow-purple-500/20 hover:shadow-purple-500/40 hover:scale-[1.02] transition-all font-mono">Gerar Preview</button>
+                  <button onClick={handleGenerate} className="flex-[2] py-5 bg-gradient-to-r from-purple-600 to-pink-500 text-white rounded-2xl font-black uppercase tracking-widest shadow-xl shadow-purple-500/20 hover:shadow-purple-500/40 hover:scale-[1.02] transition-all font-mono">Gerar base</button>
                 </div>
              </div>
           </div>
@@ -326,7 +327,7 @@ export default function App() {
             <div className="absolute inset-0 border-4 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
             <img src="/omega.png" className="w-12 h-12 animate-pulse object-contain" alt="Logo" />
           </div>
-          <h2 className="text-3xl font-black italic uppercase font-mono tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-400 animate-pulse">Consultando Banco...</h2>
+          <h2 className="text-3xl font-black italic uppercase font-mono tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-400 animate-pulse">Gerando base...</h2>
         </div>
       )}
     </div>
