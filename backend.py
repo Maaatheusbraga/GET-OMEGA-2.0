@@ -1,14 +1,19 @@
-import os
-import tempfile
-from fastapi import FastAPI, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-import pyodbc
-from datetime import datetime, date  
-import xlsxwriter
+# ============================================================================
+# IMPORTAÇÕES (Ferramentas necessárias para o servidor funcionar)
+# ============================================================================
+import os # Biblioteca para manipular o Sistema Operacional (usada para excluir arquivos temp)
+import tempfile # Biblioteca que cria arquivos temporários no HD
+from fastapi import FastAPI, BackgroundTasks # Motor principal do servidor web
+from fastapi.middleware.cors import CORSMiddleware # Libera acesso de navegadores
+from fastapi.responses import FileResponse # Ferramenta que envia arquivos (.xlsx) para o navegador
+import pyodbc # Driver que conecta o Python com o SQL Server
+from datetime import datetime, date  # Manipulação de datas
+import xlsxwriter # Biblioteca poderosa que escreve os dados no formato do Excel
 
+# Inicia o aplicativo/servidor
 app = FastAPI(title="GET OMEGA 2.0")
 
+# Permite que o frontend (React) consiga conversar com o backend sem dar erro de segurança
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,7 +21,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# CONFIGURAÇÃO DE CONEXÃO
+# String de conexão com o banco de dados SQL Server do Get Omega
 DB_CONFIG = (
     "DRIVER={ODBC Driver 17 for SQL Server};"
     "SERVER=SRV-SISTEMA;"
@@ -26,17 +31,18 @@ DB_CONFIG = (
     "TrustServerCertificate=yes;"
 )
 
-# =====================================================================
-# FUNÇÕES AUXILIARES 
-# =====================================================================
+# ============================================================================
+# FUNÇÕES DE APOIO (Ajudantes para deixar o código principal limpo)
+# ============================================================================
 
+# Função disparada pelo BackgroundTasks após o download concluir para apagar o Excel do HD
 def remove_temp_file(path: str):
-    """Deleta o arquivo temporário após o download para não lotar o HD do servidor"""
     try:
         os.unlink(path)
     except Exception as e:
         print(f"Erro ao deletar arquivo temporário: {e}")
 
+# Transforma textos com vírgula (ex: "1.500,00") em números decimais puros pro Excel conseguir somar
 def to_float(v):
     if v is None or v == "": return 0.0
     try:
@@ -47,10 +53,14 @@ def to_float(v):
     except:
         return v
 
+# ============================================================================
+# O CORAÇÃO DO SISTEMA: Define qual Procedure será executada no banco
+# ============================================================================
 def get_sql(pid, cli_id_int, dt_i, dt_f, cnpj, user, reg, xml_f):
     prefix = "SET NOCOUNT ON; SET DATEFORMAT dmy; "
     sql_exec, sql_select = "", ""
 
+    # Avalia qual "pid" (ID do Módulo) chegou do React e monta a instrução SQL correspondente
     if pid == 'credito_gerado':
         sql_select = f"""
         SET DATEFORMAT dmy; SELECT A.ID_CLIENTE, (SELECT B.NOME FROM CLIENTE B WHERE B.id_cliente = A.ID_CLIENTE) AS 'NOME', (SELECT B.CNPJ FROM CLIENTE B WHERE B.id_cliente = A.ID_CLIENTE) AS 'CNPJ', A.PERIODO_ARQ, A.REG, SUM(TRY_CAST(REPLACE(a.coluna4,',','.') as decimal(12,2))) AS 'CREDITO_GERADO', case when a.reg = '5325' then '3A' when a.reg = '5380' then '3B' when a.reg = '5425' then '3C' ELSE 'OUTRA FICHA' END 'FICHA' FROM TBL_CAT83_ARQUIVO a with(nolock) where a.id_cliente = {cli_id_int} and cast(a.periodo_arq as date) between '{dt_i}' and '{dt_f}' and a.reg in ('5325','5380','5425') GROUP BY A.periodo_arq,a.reg,a.id_cliente ORDER BY CAST(a.periodo_arq as date),a.reg
@@ -71,6 +81,7 @@ def get_sql(pid, cli_id_int, dt_i, dt_f, cnpj, user, reg, xml_f):
         cols = "id_cliente, TRY_CAST(periodo as date) as 'periodo', NOME_EMIT, CNPJ_EMIT, IE_EMIT, ind_oper, ind_emit, cod_part, NOME_PART, CNPJ_PART, CPF_PART, IE_PART, UF_PART, cod_mod, cod_sit, serie, numero_nota, chave, TRY_CAST(data_emissao as date) as 'data_emissao', TRY_CAST(data_entrada_saida as date) as 'data_entrada_saida', Valor_Nota, ind_pagamento, TRY_CAST(replace(Valor_Desconto,',','.') as decimal(14,2)) as 'Valor_Desconto', TRY_CAST(replace(Valor_Abat_NT,',','.') as decimal (14,2)) as 'Valor_Abat_NT', TRY_CAST(replace(Valor_Total_servicos,',','.') as decimal (14,2)) as 'Valor_Total_servicos', ind_frete, TRY_CAST(replace(Valor_Frete,',','.') as decimal (14,2)) as 'Valor_frete', TRY_CAST(replace(Valor_Seguro,',','.') as decimal (14,2)) as 'Valor_seguro', TRY_CAST(replace(Valor_Outros,',','.') as decimal (14,2)) as 'Valor_Outros', TRY_CAST(replace(Valor_Base,',','.') as decimal(14,2)) as 'Valor_Base', TRY_CAST(replace(Valor_Icms,',','.') as decimal (14,2)) as 'Valor_Icms', TRY_CAST(replace(Valor_Base_ST,',','.') as decimal (14,2)) as 'Valor_Base_ST', TRY_CAST(replace(Valor_Icms_ST,',','.') as decimal (14,2)) as 'Valor_Icms_ST', TRY_CAST(replace(Valor_Ipi_Total_NF,',','.') as decimal (14,2)) as 'Valor_Ipi_Toal_NF', TRY_CAST(replace(Valor_Pis,',','.') as decimal (14,2)) as 'Valor_Pis', TRY_CAST(replace(Valor_Cofins,',','.') as decimal (14,2)) as 'Valor_Cofins', TRY_CAST(replace(Valor_Pis_ST,',','.') as decimal (14,2)) as 'Valor_Pis_ST', TRY_CAST(replace(Valor_Cofins_ST,',','.') as decimal (14,2)) as 'Valor_Cofins_ST', CST_ICMS, CFOP, TRY_CAST(replace(ALIQUOTA_ICMS,',','.') as decimal (14,2)) as 'ALIQUOTA_ICMS', TRY_CAST(replace(VALOR_CONTABIL,',','.') as decimal (14,2)) as 'VALOR_CONTABIL', TRY_CAST(replace(BASE_ICMS,',','.') as decimal (14,2)) as 'BASE_ICMS', TRY_CAST(replace(VL_ICMS,',','.') as decimal (14,2)) as 'VL_ICMS', TRY_CAST(replace(BASE_ICMS_ST,',','.') as decimal (14,2)) as 'BASE_ICMS_ST', TRY_CAST(replace(VL_ICMS_ST,',','.') as decimal (14,2)) as 'VL_ICMS_ST', TRY_CAST(replace(VL_RED_BC,',','.') as decimal (14,2)) as 'VL_RED_BC', TRY_CAST(replace(VL_IPI,',','.') as decimal (14,2)) as 'VL_IPI', IIF(VL_ICMS = 0,0, IIF(BASE_ICMS = 0,0, TRY_CAST(VL_ICMS / BASE_ICMS AS DECIMAL(8,2)) * 100)) AS 'ALIQ_ICMS_CALCULADA'"
         sql_select = f"Select {cols} from TBL_RESUMO_NFE_SAIDA_SPED with(nolock) where id_cliente = '{cli_id_int}' and TRY_CAST(periodo as date) between '{dt_i}' and '{dt_f}' order by TRY_CAST(periodo as date)"
     elif pid == 'base_xml':
+        # Monta a query dinamicamente baseada nos Radio Buttons do Módulo XML
         tipo_xml = xml_f.get('tipo', 'entrada_saida')
         emit_xml = xml_f.get('emitente', 'proprios')
         where = f"id_cliente = {cli_id_int} AND xmotivo = 'Autorizado o uso da NF-e' AND CAST(periodo AS DATE) BETWEEN '{dt_i}' AND '{dt_f}'"
@@ -94,10 +105,15 @@ def get_sql(pid, cli_id_int, dt_i, dt_f, cnpj, user, reg, xml_f):
         sql_exec = f"EXEC PROC_REL_CONTRIBUICOES_BLOCO_M_GERADOR '{cnpj}', '{dt_i}', '{dt_f}', '{user}'"
     elif pid == 'bloco_d':
         sql_exec = f"EXEC PROC_REL_CONTRIBUICOES_BLOCO_D_GERADOR {cli_id_int}, '{dt_i}', '{dt_f}', '{user}'"
+        # Procedure do bloco D já traz os selects sozinhos, então não precisamos preencher o sql_select
         if reg: sql_select = ""
 
     return prefix, sql_exec, sql_select
 
+# ============================================================================
+# FORMATAÇÃO CÉLULA A CÉLULA
+# ============================================================================
+# Regras de negócio rigorosas para transformar textos do banco em números/datas corretos
 def format_value(pid, t_idx, reg, user_col, val):
     if val is None: return "-"
     
@@ -137,6 +153,7 @@ def format_value(pid, t_idx, reg, user_col, val):
         
     return val
 
+# Função que dá os nomes bonitos nas Abas da Planilha (C170, D190, M200, etc.)
 def get_tab_name(pid, t_idx, reg):
     if pid == 'efd_fiscal':
         if t_idx == 1: return "C170"
@@ -173,7 +190,11 @@ def get_tab_name(pid, t_idx, reg):
     elif reg: return reg
     else: return f"Tabela_{t_idx}"
 
+# ============================================================================
+# ENDPOINTS / ROTAS DA API (As portas de entrada que o React usa para pedir as coisas)
+# ============================================================================
 
+# ROTA 1: Validação de Login com Nível de Permissão
 @app.post("/api/login")
 async def login(request: dict):
     conn = None
@@ -184,6 +205,7 @@ async def login(request: dict):
         conn = pyodbc.connect(DB_CONFIG)
         cursor = conn.cursor()
         
+        # Puxa o usuário e a coluna "permissao" que criamos no SQL Server
         query = "SELECT Login, permissao FROM TBL_USUARIO WHERE Login = ? AND senha = ?"
         cursor.execute(query, (username, password))
         row = cursor.fetchone()
@@ -198,7 +220,7 @@ async def login(request: dict):
     finally:
         if conn: conn.close()
 
-
+# ROTA 2: Gerador de Preview (Devolve apenas as 50 primeiras linhas para o React desenhar na tela)
 @app.post("/api/generate-base")
 async def generate_base(request: dict):
     conn = None
@@ -220,13 +242,15 @@ async def generate_base(request: dict):
         target = cursor.execute(sql_select) if sql_select else cursor
         t_idx = 1
         
+        # Loop que varre as abas. O nextset() serve para pegar múltiplos SELECTs vindos da Procedure
         while True:
             if not target.description:
                 if not target.nextset(): break
                 continue
                 
+            # Tratamento Poka-Yoke: Se o banco mandar uma coluna vazia, dá o nome genérico COLUNA_X
             cols_res = [col[0] if col[0] and str(col[0]).strip() != "" else f"COLUNA_{i+1}" for i, col in enumerate(target.description)]
-            rows = target.fetchmany(50) 
+            rows = target.fetchmany(50) # Pega estritamente 50 linhas para não travar o navegador
             clean_rows = []
             
             for r in rows:
@@ -247,7 +271,7 @@ async def generate_base(request: dict):
     finally:
         if conn: conn.close()
 
-
+# ROTA 3: Gerador do Excel Completo (Puxa tudo, salva no HD temporariamente e envia via download)
 @app.post("/api/download-excel")
 async def download_excel(request: dict, background_tasks: BackgroundTasks):
     conn = None
@@ -265,10 +289,13 @@ async def download_excel(request: dict, background_tasks: BackgroundTasks):
         if sql_exec: cursor.execute(prefix + sql_exec)
         target = cursor.execute(sql_select) if sql_select else cursor
 
+        # Cria um arquivo temporário físico no servidor para suportar bases infinitas
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
         
+        # Inicia a criação do arquivo habilitando o recurso constant_memory (não carrega tudo na RAM)
         wb = xlsxwriter.Workbook(tmp.name, {'constant_memory': True})
         
+        # Formatação visual do Cabeçalho do Excel: Fundo Azul Escuro, Texto Branco e Negrito
         header_format = wb.add_format({
             'bg_color': '#0B2447',
             'font_color': '#FFFFFF',
@@ -284,15 +311,19 @@ async def download_excel(request: dict, background_tasks: BackgroundTasks):
                 continue
                 
             nome_aba = get_tab_name(pid, t_idx, reg)
-            ws = wb.add_worksheet(nome_aba[:31])
+            ws = wb.add_worksheet(nome_aba[:31]) # Excel não aceita abas com mais de 31 caracteres
+            
+            # Tratamento da Coluna Vazia
             cols_res = [col[0] if col[0] and str(col[0]).strip() != "" else f"COLUNA_{i+1}" for i, col in enumerate(target.description)]
 
+            # Escreve o cabeçalho (Linha 0) com a formatação bonitona
             for col_num, col_name in enumerate(cols_res):
                 ws.write(0, col_num, col_name, header_format)
 
             col_widths = {i: len(str(col)) + 2 for i, col in enumerate(cols_res)}
 
             row_num = 1
+            # Loop Chunking: Puxa do banco 10.000 linhas por vez para não estourar a memória
             while True:
                 rows = target.fetchmany(10000)
                 if not rows:
@@ -304,29 +335,35 @@ async def download_excel(request: dict, background_tasks: BackgroundTasks):
                         val = format_value(pid, t_idx, reg, col_idx + 1, r[col_idx])
                         row_data.append(val)
                         
+                        # Calcula a largura inteligente das colunas apenas para as 500 primeiras linhas
                         if row_num <= 500:
                             cell_len = len(str(val)) if val is not None else 1
                             if cell_len > col_widths[col_idx]:
                                 col_widths[col_idx] = cell_len
                     
+                    # Escreve a linha inteira no arquivo temporário
                     ws.write_row(row_num, 0, row_data)
                     row_num += 1
 
+            # Aplica a largura inteligente calculada em cada coluna
             for col_idx, width in col_widths.items():
                 ws.set_column(col_idx, col_idx, min(max(width, 12), 80))
 
             t_idx += 1
             if not target.nextset(): break
 
+        # Fecha o arquivo temporário garantindo que tudo foi gravado
         wb.close()
         
+        # Agenda para o Python deletar o arquivo logo depois que o download finalizar no navegador
         background_tasks.add_task(remove_temp_file, tmp.name)
         
+        # Preparação do nome padrão sugerido para baixar
         dt_i_formatada = dt_i.replace('/', '-')
         dt_f_formatada = dt_f.replace('/', '-')
         nome_proc = pid.replace('_', ' ').upper()
         
-        # Define a parte extra do nome (REG ou Filtros do XML)
+        # Define a parte extra do nome dinamicamente (REG ou Filtros do XML)
         extra_part = f" - {reg}" if reg and str(reg).strip() != "" else ""
         
         if pid == 'base_xml':
@@ -338,26 +375,31 @@ async def download_excel(request: dict, background_tasks: BackgroundTasks):
         
         filename = f"GET OMEGA - {nome_proc}{extra_part} - {cnpj or cli_id_int} - {dt_i_formatada} A {dt_f_formatada}.xlsx"
         
+        # Envia o arquivo Excel formatado para a tela do usuário
         return FileResponse(
             path=tmp.name, 
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             filename=filename
         )
     except Exception as e:
+        # Poka-Yoke Crítico: Se der erro, manda um JSON para o React, que avisa o usuário
         return {"success": False, "error": str(e)}
     finally:
         if conn: conn.close()
 
+# ROTA 4: Pesquisa Dinâmica de Clientes (Chamada a cada letra digitada)
 @app.get("/api/clientes")
 async def get_clientes(search: str = ""):
     conn = pyodbc.connect(DB_CONFIG)
     cursor = conn.cursor()
+    # Puxa os top 50 resultados que batem com o que foi digitado na lupa
     cursor.execute("SELECT TOP 50 id_cliente, nome, cnpj FROM cliente WHERE nome LIKE ?", (f"%{search}%",))
     cols = [col[0] for col in cursor.description]
     res = [dict(zip(cols, r)) for r in cursor.fetchall()]
     conn.close()
     return res
 
+# Comando que inicializa o servidor de fato ao rodar o arquivo
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=3001)
