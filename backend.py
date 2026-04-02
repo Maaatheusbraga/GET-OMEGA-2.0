@@ -3,12 +3,26 @@
 # ============================================================================
 import os # Biblioteca para manipular o Sistema Operacional (usada para excluir arquivos temp)
 import tempfile # Biblioteca que cria arquivos temporários no HD
-from fastapi import FastAPI, BackgroundTasks # Motor principal do servidor web
+import logging
+from fastapi import FastAPI, BackgroundTasks, Request # Motor principal do servidor web
 from fastapi.middleware.cors import CORSMiddleware # Libera acesso de navegadores
 from fastapi.responses import FileResponse # Ferramenta que envia arquivos (.xlsx) para o navegador
 import pyodbc # Driver que conecta o Python com o SQL Server
 from datetime import datetime, date  # Manipulação de datas
 import xlsxwriter # Biblioteca poderosa que escreve os dados no formato do Excel
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | GET-OMEGA | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+audit_log = logging.getLogger("get_omega.audit")
+
+
+def _client_ip(req: Request) -> str:
+    if req.client:
+        return req.client.host
+    return "?"
 
 # Inicia o aplicativo/servidor
 app = FastAPI(title="GET OMEGA 2.0")
@@ -196,11 +210,12 @@ def get_tab_name(pid, t_idx, reg):
 
 # ROTA 1: Validação de Login com Nível de Permissão
 @app.post("/api/login")
-async def login(request: dict):
+async def login(payload: dict, req: Request):
     conn = None
     try:
-        username = request.get("username", "")
-        password = request.get("password", "")
+        username = payload.get("username", "")
+        password = payload.get("password", "")
+        audit_log.info("LOGIN tentativa | ip=%s | usuario=%s", _client_ip(req), username or "(vazio)")
 
         conn = pyodbc.connect(DB_CONFIG)
         cursor = conn.cursor()
@@ -212,8 +227,10 @@ async def login(request: dict):
 
         if row:
             perm = str(row[1]).lower().strip() if row[1] else "normal"
+            audit_log.info("LOGIN ok | ip=%s | usuario=%s | permissao=%s", _client_ip(req), row[0], perm)
             return {"success": True, "user": {"name": row[0], "permissao": perm}}
         else:
+            audit_log.info("LOGIN falhou | ip=%s | usuario=%s", _client_ip(req), username or "(vazio)")
             return {"success": False, "error": "Usuário ou senha incorretos."}
     except Exception as e:
         return {"success": False, "error": f"Erro no banco de dados: {str(e)}"}
@@ -222,13 +239,17 @@ async def login(request: dict):
 
 # ROTA 2: Gerador de Preview (Devolve apenas as 50 primeiras linhas para o React desenhar na tela)
 @app.post("/api/generate-base")
-async def generate_base(request: dict):
+async def generate_base(payload: dict, req: Request):
     conn = None
     try:
         conn = pyodbc.connect(DB_CONFIG, autocommit=True)
         cursor = conn.cursor()
         
-        p, pid, user, reg, xml_f = request.get('params', {}), request.get('procedureId', '').strip(), str(request.get('userName', 'Analista')).replace("'", ""), request.get('reg', '').strip(), request.get('xmlFilters', {}) 
+        p, pid, user, reg, xml_f = payload.get('params', {}), payload.get('procedureId', '').strip(), str(payload.get('userName', 'Analista')).replace("'", ""), payload.get('reg', '').strip(), payload.get('xmlFilters', {})
+        audit_log.info(
+            "PREVIEW | ip=%s | usuario=%s | modulo=%s | reg=%s | cliente_id=%s",
+            _client_ip(req), user, pid or "(vazio)", reg or "-", p.get('p_cliente') or p.get('id_cliente') or "-",
+        ) 
         
         dt_i = datetime.strptime(p.get('p_periodo_i') or p.get('data_inicio'), '%Y-%m-%d').strftime('%d/%m/%Y')
         dt_f = datetime.strptime(p.get('p_periodo_f') or p.get('data_fim'), '%Y-%m-%d').strftime('%d/%m/%Y')
@@ -273,13 +294,17 @@ async def generate_base(request: dict):
 
 # ROTA 3: Gerador do Excel Completo (Puxa tudo, salva no HD temporariamente e envia via download)
 @app.post("/api/download-excel")
-async def download_excel(request: dict, background_tasks: BackgroundTasks):
+async def download_excel(payload: dict, background_tasks: BackgroundTasks, req: Request):
     conn = None
     try:
         conn = pyodbc.connect(DB_CONFIG, autocommit=True)
         cursor = conn.cursor()
         
-        p, pid, user, reg, xml_f = request.get('params', {}), request.get('procedureId', '').strip(), str(request.get('userName', 'Analista')).replace("'", ""), request.get('reg', '').strip(), request.get('xmlFilters', {}) 
+        p, pid, user, reg, xml_f = payload.get('params', {}), payload.get('procedureId', '').strip(), str(payload.get('userName', 'Analista')).replace("'", ""), payload.get('reg', '').strip(), payload.get('xmlFilters', {})
+        audit_log.info(
+            "DOWNLOAD_EXCEL | ip=%s | usuario=%s | modulo=%s | reg=%s | cliente_id=%s",
+            _client_ip(req), user, pid or "(vazio)", reg or "-", p.get('p_cliente') or p.get('id_cliente') or "-",
+        ) 
         
         dt_i = datetime.strptime(p.get('p_periodo_i') or p.get('data_inicio'), '%Y-%m-%d').strftime('%d/%m/%Y')
         dt_f = datetime.strptime(p.get('p_periodo_f') or p.get('data_fim'), '%Y-%m-%d').strftime('%d/%m/%Y')
@@ -389,7 +414,8 @@ async def download_excel(request: dict, background_tasks: BackgroundTasks):
 
 # ROTA 4: Pesquisa Dinâmica de Clientes (Chamada a cada letra digitada)
 @app.get("/api/clientes")
-async def get_clientes(search: str = ""):
+async def get_clientes(req: Request, search: str = ""):
+    audit_log.info("BUSCA_CLIENTES | ip=%s | termo=%s", _client_ip(req), search or "(vazio)")
     conn = pyodbc.connect(DB_CONFIG)
     cursor = conn.cursor()
     # Puxa os top 50 resultados que batem com o que foi digitado na lupa
