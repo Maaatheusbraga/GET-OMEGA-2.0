@@ -204,6 +204,110 @@ def get_tab_name(pid, t_idx, reg):
     elif reg: return reg
     else: return f"Tabela_{t_idx}"
 
+def _fetch_usuario_login_row(cursor, conn, username: str, password: str, raw_username: str, raw_password: str):
+    """
+    Vários formatos de coluna no SQL Server fazem um único WHERE falhar (ex.: CHAR com espaços).
+    Ordem: trim+CAST, igualdade simples (legado), login case-insensitive, credenciais sem strip.
+    """
+    usernames_to_try = []
+
+    def _add_candidate(val: str):
+        val = (val or "").strip()
+        if val and val not in usernames_to_try:
+            usernames_to_try.append(val)
+
+    _add_candidate(username)
+    # Vários usuários digitam e-mail completo, mas no banco o Login pode estar em outro formato.
+    local_part = ""
+    if '@' in username:
+        local_part = username.split('@', 1)[0].strip()
+        _add_candidate(local_part)
+    # Alguns cadastros guardam login sem pontuação do e-mail.
+    if local_part:
+        _add_candidate(local_part.replace(".", ""))
+        # Em alguns ambientes, o login é apenas o primeiro bloco antes do ponto.
+        _add_candidate(local_part.split(".", 1)[0])
+
+    attempts = []
+    for uname in usernames_to_try:
+        attempts.extend([
+        (
+            "SELECT Login, permissao FROM TBL_USUARIO "
+            "WHERE LTRIM(RTRIM(CAST(Login AS NVARCHAR(4000)))) = ? "
+            "AND LTRIM(RTRIM(CAST(senha AS NVARCHAR(4000)))) = ?",
+            (uname, password),
+        ),
+        (
+            "SELECT Login, permissao FROM TBL_USUARIO WHERE Login = ? AND senha = ?",
+            (uname, password),
+        ),
+        (
+            "SELECT Login, permissao FROM TBL_USUARIO "
+            "WHERE LOWER(LTRIM(RTRIM(CAST(Login AS NVARCHAR(4000))))) = LOWER(?) "
+            "AND LTRIM(RTRIM(CAST(senha AS NVARCHAR(4000)))) = ?",
+            (uname, password),
+        ),
+    ])
+
+    # Se a tabela tiver coluna de e-mail, tenta autenticar por ela também.
+    email_columns = ["Email", "email", "EMAIL", "E_MAIL", "e_mail", "MAIL", "mail"]
+    for col_name in email_columns:
+        try:
+            cursor.execute(
+                "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TBL_USUARIO' AND COLUMN_NAME = ?",
+                (col_name,),
+            )
+            if cursor.fetchone():
+                for uname in usernames_to_try:
+                    attempts.append((
+                        f"SELECT Login, permissao FROM TBL_USUARIO "
+                        f"WHERE LOWER(LTRIM(RTRIM(CAST({col_name} AS NVARCHAR(4000))))) = LOWER(?) "
+                        f"AND LTRIM(RTRIM(CAST(senha AS NVARCHAR(4000)))) = ?",
+                        (uname, password),
+                    ))
+                break
+        except Exception:
+            pass
+    if (raw_username, raw_password) != (username, password):
+        attempts.append(
+            (
+                "SELECT Login, permissao FROM TBL_USUARIO WHERE Login = ? AND senha = ?",
+                (raw_username, raw_password),
+            )
+        )
+
+    for idx, (sql_q, params) in enumerate(attempts):
+        try:
+            cursor.execute(sql_q, params)
+            row = cursor.fetchone()
+            if row:
+                if idx > 0:
+                    audit_log.info("LOGIN matched via fallback strategy #%s", idx + 1)
+                return row
+        except Exception as ex:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            audit_log.warning("LOGIN SQL attempt %s skipped: %s", idx + 1, ex)
+    # Diagnóstico rápido para identificar se o problema é usuário inexistente ou senha incorreta.
+    try:
+        in_clause = " OR ".join(
+            ["LOWER(LTRIM(RTRIM(CAST(Login AS NVARCHAR(4000))))) = LOWER(?)"] * len(usernames_to_try)
+        )
+        cursor.execute(
+            f"SELECT TOP 1 Login FROM TBL_USUARIO WHERE {in_clause}",
+            tuple(usernames_to_try),
+        )
+        found_login = cursor.fetchone()
+        if found_login:
+            audit_log.info("LOGIN diagnostico | usuario encontrado no banco, mas senha nao conferiu")
+        else:
+            audit_log.info("LOGIN diagnostico | usuario nao encontrado no banco para os candidatos=%s", usernames_to_try)
+    except Exception as ex:
+        audit_log.warning("LOGIN diagnostico falhou: %s", ex)
+    return None
+
 # ============================================================================
 # ENDPOINTS / ROTAS DA API (As portas de entrada que o React usa para pedir as coisas)
 # ============================================================================
@@ -213,22 +317,31 @@ def get_tab_name(pid, t_idx, reg):
 async def login(payload: dict, req: Request):
     conn = None
     try:
-        username = payload.get("username", "")
-        password = payload.get("password", "")
+        raw_username = payload.get("username")
+        raw_password = payload.get("password")
+        if raw_username is None:
+            raw_username = ""
+        if raw_password is None:
+            raw_password = ""
+        if not isinstance(raw_username, str):
+            raw_username = str(raw_username)
+        if not isinstance(raw_password, str):
+            raw_password = str(raw_password)
+
+        username = raw_username.strip()
+        password = raw_password.strip()
         audit_log.info("LOGIN tentativa | ip=%s | usuario=%s", _client_ip(req), username or "(vazio)")
 
         conn = pyodbc.connect(DB_CONFIG)
         cursor = conn.cursor()
-        
-        # Puxa o usuário e a coluna "permissao" que criamos no SQL Server
-        query = "SELECT Login, permissao FROM TBL_USUARIO WHERE Login = ? AND senha = ?"
-        cursor.execute(query, (username, password))
-        row = cursor.fetchone()
+
+        row = _fetch_usuario_login_row(cursor, conn, username, password, raw_username, raw_password)
 
         if row:
             perm = str(row[1]).lower().strip() if row[1] else "normal"
-            audit_log.info("LOGIN ok | ip=%s | usuario=%s | permissao=%s", _client_ip(req), row[0], perm)
-            return {"success": True, "user": {"name": row[0], "permissao": perm}}
+            login_name = (row[0] or "").strip() if row[0] is not None else ""
+            audit_log.info("LOGIN ok | ip=%s | usuario=%s | permissao=%s", _client_ip(req), login_name, perm)
+            return {"success": True, "user": {"name": login_name, "permissao": perm}}
         else:
             audit_log.info("LOGIN falhou | ip=%s | usuario=%s", _client_ip(req), username or "(vazio)")
             return {"success": False, "error": "Usuário ou senha incorretos."}

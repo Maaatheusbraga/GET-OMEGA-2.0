@@ -39,12 +39,23 @@ const REG_OPTIONS = {
   bloco_1000: ["1100", "1500", "1300", "1700"]
 };
 
+/** Lê sessão salva sem quebrar a página se o JSON do localStorage estiver inválido */
+function loadSavedUser() {
+  try {
+    const raw = localStorage.getItem('omega_user');
+    if (!raw || raw.trim() === '') return null;
+    const data = JSON.parse(raw);
+    if (data && typeof data === 'object' && data.name) return data;
+  } catch { /* ignore */ }
+  return null;
+}
+
 // ============================================================================
 // FUNÇÃO PRINCIPAL DO SISTEMA (Onde a mágica do React acontece)
 // ============================================================================
 export default function App() {
   // Tenta buscar no cofre do navegador (localStorage) se o usuário já estava logado antes do F5
-  const savedUser = JSON.parse(localStorage.getItem('omega_user'));
+  const savedUser = loadSavedUser();
   
   // VARIÁVEIS DE ESTADO (Se o valor delas mudar, a tela se atualiza sozinha)
   const [darkMode, setDarkMode] = useState(true); // Controla o tema claro/escuro
@@ -195,7 +206,10 @@ export default function App() {
         const res = await fetch('http://192.168.2.189:3001/api/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: analistaName, password: password })
+            body: JSON.stringify({
+              username: analistaName.trim(),
+              password: password.trim()
+            })
         });
         
         const json = await res.json();
