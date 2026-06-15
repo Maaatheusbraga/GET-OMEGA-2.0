@@ -167,6 +167,17 @@ def format_value(pid, t_idx, reg, user_col, val):
         
     return val
 
+# Ordem fixa das 17 abas exportadas pelo PROC_REL_CONTRIBUICOES_BLOCO_M_GERADOR (1 result set = 1 aba)
+BLOCO_M_SHEET_NAMES = [
+    "M200", "M200_M205", "M200_M210",
+    "M600", "M600_M605", "M600_M610",
+    "M100", "M500",
+    "M100_M105", "M100_M110",
+    "M500_M505", "M500_M510",
+    "M700", "M400", "M800",
+    "M220", "M620",
+]
+
 # Função que dá os nomes bonitos nas Abas da Planilha (C170, D190, M200, etc.)
 def get_tab_name(pid, t_idx, reg):
     if pid == 'efd_fiscal':
@@ -176,9 +187,9 @@ def get_tab_name(pid, t_idx, reg):
         elif t_idx == 4: return "D590"
         else: return f"EFD_T{t_idx}"
     elif pid == 'efd_bloco_m':
-        bloco_m_abas = ["M200", "M200_M205", "M200_M210", "M600", "M600_M605", "M600_M610", "M100", "M500", "M500_M110", "M500_M505", "M500_M510", "M700", "M400", "M800", "M620"]
-        if t_idx <= len(bloco_m_abas): return bloco_m_abas[t_idx - 1]
-        else: return f"M_T{t_idx}"
+        if 1 <= t_idx <= len(BLOCO_M_SHEET_NAMES):
+            return BLOCO_M_SHEET_NAMES[t_idx - 1]
+        return f"M_T{t_idx}"
     elif pid == 'base_xml': return "XML"
     elif pid == 'credito_gerado': return "CREDITO_GERADO"
     elif pid == 'resumo_entrada_sped': return "RESUMO_ENTRADA"
