@@ -4,12 +4,25 @@
 import os # Biblioteca para manipular o Sistema Operacional (usada para excluir arquivos temp)
 import tempfile # Biblioteca que cria arquivos temporários no HD
 import logging
+import mimetypes
+from pathlib import Path
 from fastapi import FastAPI, BackgroundTasks, Request # Motor principal do servidor web
 from fastapi.middleware.cors import CORSMiddleware # Libera acesso de navegadores
-from fastapi.responses import FileResponse # Ferramenta que envia arquivos (.xlsx) para o navegador
+from fastapi.responses import FileResponse, Response # Ferramenta que envia arquivos (.xlsx / .txt) para o navegador
+from fastapi.staticfiles import StaticFiles
 import pyodbc # Driver que conecta o Python com o SQL Server
 from datetime import datetime, date  # Manipulação de datas
 import xlsxwriter # Biblioteca poderosa que escreve os dados no formato do Excel
+import re
+import uuid
+from collections import defaultdict
+from threading import Lock
+
+# No Windows Server o .js costuma ser detectado como text/plain e o navegador bloqueia o React
+mimetypes.add_type("application/javascript", ".js")
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("text/css", ".css")
+mimetypes.add_type("image/png", ".png")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,6 +47,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def corrigir_mime_types(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path.lower()
+    if path.endswith(".js"):
+        response.headers["content-type"] = "application/javascript"
+    elif path.endswith(".css"):
+        response.headers["content-type"] = "text/css"
+    elif path.endswith(".png"):
+        response.headers["content-type"] = "image/png"
+    return response
 
 # String de conexão com o banco de dados SQL Server do Get Omega
 DB_CONFIG = (
@@ -422,6 +447,9 @@ async def download_excel(payload: dict, background_tasks: BackgroundTasks, req: 
     conn = None
     try:
         conn = pyodbc.connect(DB_CONFIG, autocommit=True)
+        # Evita timeout do statement em períodos longos (ex.: 5 anos no base_xml).
+        # No pyodbc o timeout é da conexão, não do cursor.
+        conn.timeout = 0
         cursor = conn.cursor()
         
         p, pid, user, reg, xml_f = payload.get('params', {}), payload.get('procedureId', '').strip(), str(payload.get('userName', 'Analista')).replace("'", ""), payload.get('reg', '').strip(), payload.get('xmlFilters', {})
@@ -438,12 +466,17 @@ async def download_excel(payload: dict, background_tasks: BackgroundTasks, req: 
         if sql_exec: cursor.execute(prefix + sql_exec)
         target = cursor.execute(sql_select) if sql_select else cursor
 
-        # Cria um arquivo temporário físico no servidor para suportar bases infinitas
+        # Cria um arquivo temporário físico no servidor.
+        # Importante: no Windows, manter o handle aberto pode causar lock/instabilidade ao enviar o arquivo.
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+        tmp_path = tmp.name
+        tmp.close()
         
         # Inicia a criação do arquivo habilitando o recurso constant_memory (não carrega tudo na RAM)
-        wb = xlsxwriter.Workbook(tmp.name, {'constant_memory': True})
-        
+        wb = xlsxwriter.Workbook(tmp_path, {'constant_memory': True})
+        # Bases grandes (ex.: XML com 5 anos / 650k+ linhas) passam do limite ZIP padrão
+        wb.use_zip64()
+
         # Formatação visual do Cabeçalho do Excel: Fundo Azul Escuro, Texto Branco e Negrito
         header_format = wb.add_format({
             'bg_color': '#0B2447',
@@ -454,6 +487,7 @@ async def download_excel(payload: dict, background_tasks: BackgroundTasks, req: 
         })
 
         t_idx = 1
+        rows_written_total = 0
         while True:
             if not target.description:
                 if not target.nextset(): break
@@ -493,6 +527,10 @@ async def download_excel(payload: dict, background_tasks: BackgroundTasks, req: 
                     # Escreve a linha inteira no arquivo temporário
                     ws.write_row(row_num, 0, row_data)
                     row_num += 1
+                    rows_written_total += 1
+                    # Loga progressos a cada 50k linhas para ajudar na investigação de "download morre no meio"
+                    if rows_written_total > 0 and rows_written_total % 50000 == 0:
+                        audit_log.info("DOWNLOAD_EXCEL | progresso | linhas=%s | modulo=%s", rows_written_total, pid)
 
             # Aplica a largura inteligente calculada em cada coluna
             for col_idx, width in col_widths.items():
@@ -505,7 +543,7 @@ async def download_excel(payload: dict, background_tasks: BackgroundTasks, req: 
         wb.close()
         
         # Agenda para o Python deletar o arquivo logo depois que o download finalizar no navegador
-        background_tasks.add_task(remove_temp_file, tmp.name)
+        background_tasks.add_task(remove_temp_file, tmp_path)
         
         # Preparação do nome padrão sugerido para baixar
         dt_i_formatada = dt_i.replace('/', '-')
@@ -526,12 +564,14 @@ async def download_excel(payload: dict, background_tasks: BackgroundTasks, req: 
         
         # Envia o arquivo Excel formatado para a tela do usuário
         return FileResponse(
-            path=tmp.name, 
+            path=tmp_path, 
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             filename=filename
         )
     except Exception as e:
         # Poka-Yoke Crítico: Se der erro, manda um JSON para o React, que avisa o usuário
+        # e registra a stack trace completa no log (para investigar "download morreu no meio").
+        audit_log.exception("DOWNLOAD_EXCEL | erro | modulo=%s", payload.get('procedureId', '').strip())
         return {"success": False, "error": str(e)}
     finally:
         if conn: conn.close()
@@ -549,7 +589,231 @@ async def get_clientes(req: Request, search: str = ""):
     conn.close()
     return res
 
+# ============================================================================
+# RESSARCIMENTO IPI (R11 / R12) — mesma API, mesmo processo
+# ============================================================================
+_PROCESS_STORE: dict = {}
+_PROCESS_LOCK = Lock()
+
+
+def _ressarc_connect():
+    conn = pyodbc.connect(DB_CONFIG, autocommit=True)
+    conn.timeout = 0
+    return conn
+
+
+def _drain_cursor(cursor):
+    try:
+        while True:
+            try:
+                cursor.fetchall()
+            except Exception:
+                pass
+            if not cursor.nextset():
+                break
+    except Exception:
+        pass
+
+
+def _safe_empresa_nome(nome: str) -> str:
+    cleaned = re.sub(r'[\\/:*?"<>|]+', " ", (nome or "").strip())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned or "EMPRESA"
+
+
+def _ym_from_periodo(periodo) -> str:
+    if isinstance(periodo, datetime):
+        return f"{periodo.year}{periodo.month:02d}"
+    if isinstance(periodo, date):
+        return f"{periodo.year}{periodo.month:02d}"
+    s = str(periodo).strip()
+    if len(s) >= 7 and s[4] == "-":
+        return s[0:4] + s[5:7]
+    digits = re.sub(r"\D", "", s)
+    if len(digits) >= 6:
+        return digits[:6]
+    return digits
+
+
+def _fetch_txt_by_month(cursor, table: str, cliente_id: int, periodo_i: str, periodo_f: str):
+    cursor.execute(
+        f"""
+        SELECT
+            CAST(periodo AS DATE) AS periodo,
+            ARQUIVO_TXT
+        FROM {table} WITH (NOLOCK)
+        WHERE id_cliente = ?
+          AND CAST(periodo AS DATE) BETWEEN ? AND ?
+          AND ARQUIVO_TXT IS NOT NULL
+          AND LTRIM(RTRIM(CAST(ARQUIVO_TXT AS NVARCHAR(4000)))) <> ''
+        ORDER BY CAST(periodo AS DATE)
+        """,
+        (cliente_id, periodo_i, periodo_f),
+    )
+    by_month: dict[str, list[str]] = defaultdict(list)
+    for periodo, arquivo_txt in cursor.fetchall():
+        ym = _ym_from_periodo(periodo)
+        line = str(arquivo_txt or "").rstrip("\r\n")
+        if ym and line:
+            by_month[ym].append(line)
+    return by_month
+
+
+def _append_mensal_files(files: list, file_map: dict, ficha: str, by_month: dict, empresa: str):
+    for ym in sorted(by_month.keys()):
+        lines = by_month[ym]
+        file_id = f"{ficha}-{ym}"
+        file_name = f"FICHA {ficha} - {empresa} - {ym}.TXT"
+        file_map[file_id] = {
+            "ficha": ficha,
+            "periodoCode": ym,
+            "fileName": file_name,
+            "lines": lines,
+        }
+        files.append(
+            {
+                "id": file_id,
+                "ficha": ficha,
+                "periodoLabel": f"Mês {ym[4:]}/{ym[:4]}",
+                "periodoCode": ym,
+                "linhas": len(lines),
+                "fileName": file_name,
+            }
+        )
+
+
+@app.get("/api/health")
+async def health_check():
+    return {"ok": True, "service": "GET OMEGA 2.0"}
+
+
+@app.post("/api/processar")
+async def processar_ressarcimento(payload: dict, req: Request):
+    """R11 + R12: EXEC PROC_CARGA_R11 e lê TBL_R11 / TBL_R12 (mensal)."""
+    conn = None
+    try:
+        cliente_id = int(payload.get("id_cliente") or 0)
+        nome_cliente = str(payload.get("nome_cliente") or "").strip()
+        periodo_i = str(payload.get("periodo_i") or "").strip()
+        periodo_f = str(payload.get("periodo_f") or "").strip()
+        usuario = str(payload.get("usuario") or "Analista").strip()
+
+        if not cliente_id:
+            return {"success": False, "error": "Informe o cliente."}
+        if not periodo_i or not periodo_f:
+            return {"success": False, "error": "Informe o período."}
+
+        datetime.strptime(periodo_i, "%Y-%m-%d")
+        datetime.strptime(periodo_f, "%Y-%m-%d")
+
+        audit_log.info(
+            "PROCESSAR_RESSARC | ip=%s | usuario=%s | cliente=%s | periodo=%s..%s",
+            _client_ip(req),
+            usuario,
+            cliente_id,
+            periodo_i,
+            periodo_f,
+        )
+
+        conn = _ressarc_connect()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "EXEC PROC_CARGA_R11 @p_cliente=?, @p_periodo_i=?, @p_periodo_f=?",
+            (cliente_id, periodo_i, periodo_f),
+        )
+        _drain_cursor(cursor)
+
+        empresa = _safe_empresa_nome(nome_cliente)
+        process_id = str(uuid.uuid4())
+        files = []
+        file_map = {}
+
+        r11_by_month = _fetch_txt_by_month(cursor, "TBL_R11", cliente_id, periodo_i, periodo_f)
+        r12_by_month = _fetch_txt_by_month(cursor, "TBL_R12", cliente_id, periodo_i, periodo_f)
+        _append_mensal_files(files, file_map, "R11", r11_by_month, empresa)
+        _append_mensal_files(files, file_map, "R12", r12_by_month, empresa)
+
+        with _PROCESS_LOCK:
+            _PROCESS_STORE[process_id] = {
+                "created_at": datetime.now().isoformat(timespec="seconds"),
+                "id_cliente": cliente_id,
+                "nome_cliente": empresa,
+                "periodo_i": periodo_i,
+                "periodo_f": periodo_f,
+                "files": file_map,
+            }
+
+        audit_log.info(
+            "PROCESSAR_RESSARC ok | process_id=%s | arquivos=%s | r11=%s | r12=%s",
+            process_id,
+            len(files),
+            len(r11_by_month),
+            len(r12_by_month),
+        )
+
+        return {
+            "success": True,
+            "processId": process_id,
+            "files": files,
+            "message": None
+            if files
+            else "Processamento concluído, mas não há linhas R11/R12 no período.",
+        }
+    except Exception as e:
+        audit_log.exception("PROCESSAR_RESSARC falhou: %s", e)
+        return {"success": False, "error": str(e)}
+    finally:
+        if conn:
+            conn.close()
+
+
+@app.get("/api/download/{process_id}/{file_id}")
+async def download_txt_ressarcimento(process_id: str, file_id: str, req: Request):
+    with _PROCESS_LOCK:
+        proc = _PROCESS_STORE.get(process_id)
+        file_data = proc["files"].get(file_id) if proc else None
+
+    if not file_data:
+        return Response(
+            content="Arquivo não encontrado. Processe novamente.",
+            status_code=404,
+            media_type="text/plain; charset=utf-8",
+        )
+
+    lines = file_data["lines"]
+    content = "\r\n".join(lines)
+    file_name = file_data["fileName"]
+    audit_log.info(
+        "DOWNLOAD_RESSARC | ip=%s | process_id=%s | file=%s | linhas=%s",
+        _client_ip(req),
+        process_id,
+        file_name,
+        len(lines),
+    )
+    ascii_name = re.sub(r"[^\x20-\x7E]", "_", file_name)
+    headers = {
+        "Content-Disposition": (
+            f'attachment; filename="{ascii_name}"; '
+            f"filename*=UTF-8''{file_name.replace(' ', '%20')}"
+        )
+    }
+    return Response(
+        content=content.encode("latin-1", errors="replace"),
+        media_type="text/plain; charset=iso-8859-1",
+        headers=headers,
+    )
+
+
+# Serve o frontend React (pasta dist/) na mesma porta da API — modo produção no servidor
+_DIST_DIR = Path(__file__).resolve().parent / "dist"
+if _DIST_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=_DIST_DIR, html=True), name="spa")
+
 # Comando que inicializa o servidor de fato ao rodar o arquivo
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=3001)
+    port = int(os.environ.get("PORT", "3001"))
+    mode = "produção (frontend + API)" if _DIST_DIR.is_dir() else "somente API"
+    audit_log.info("Iniciando GET OMEGA 2.0 | porta=%s | modo=%s", port, mode)
+    uvicorn.run(app, host="0.0.0.0", port=port)

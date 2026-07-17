@@ -4,7 +4,7 @@ color 0A
 
 echo.
 echo  ========================================
-echo    GET OMEGA 2.0 - Iniciando sistema...
+echo    GET OMEGA 2.0 - Modo Desenvolvimento
 echo  ========================================
 echo.
 
@@ -25,7 +25,10 @@ echo  ========================================
 echo    Sistema iniciado com sucesso!
 echo.
 echo    Acesso local:  http://localhost:3000
-echo    Acesso rede:   http://192.168.2.189:3000
+echo    Acesso rede:   http://SEU-IP:3000
+echo.
+echo    Para rodar no SERVIDOR da empresa, use:
+echo    INICIAR_SERVIDOR.bat
 echo  ========================================
 echo.
 

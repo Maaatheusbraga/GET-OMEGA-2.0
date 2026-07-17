@@ -4,11 +4,15 @@
 // Importa o React e os "Hooks" (useState cria variáveis que atualizam a tela, useEffect executa ações automáticas)
 import React, { useState, useEffect } from 'react';
 // Importa os ícones visuais (lupa, porta de saída, setas, planilhas, etc.) do pacote Lucide
-import { Search, LogOut, ChevronRight, FileSpreadsheet, ArrowLeft, Moon, Sun, Database, Layers, TableProperties, Box, ClipboardList, CheckCircle2, FileCode, BadgeDollarSign, } from 'lucide-react';
+import { Search, LogOut, ChevronRight, FileSpreadsheet, ArrowLeft, Moon, Sun, Database, Layers, TableProperties, Box, ClipboardList, CheckCircle2, FileCode, BadgeDollarSign, FileText, } from 'lucide-react';
 // Importa a função que força o navegador a fazer o download de um arquivo
 import { saveAs } from 'file-saver';
 // Importa a biblioteca de "Toasts" (aquelas notificações bonitinhas que aparecem no canto da tela)
 import toast, { Toaster } from 'react-hot-toast';
+import RessarcimentoModule from './RessarcimentoModule.jsx';
+
+// URL da API: vazio = mesma origem (produção no servidor). Em dev/preview o Vite faz proxy de /api.
+const API_BASE = import.meta.env.VITE_API_URL || '';
 
 // ============================================================================
 // CONFIGURAÇÃO DOS MÓDULOS (Os "Cards" do Dashboard)
@@ -62,7 +66,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false); // Mostra/esconde a tela de carregamento (engrenagem)
   const [isConsultOpen, setIsConsultOpen] = useState(false); // Mostra/esconde a janela de pesquisar cliente
   const [selectedProc, setSelectedProc] = useState(null); // Guarda qual Card o analista clicou
-  const [view, setView] = useState(savedUser ? 'dashboard' : 'login'); // Controla em qual tela estamos (login, dashboard, params, results)
+  const [view, setView] = useState('hub'); // hub → login → dashboard/params/results
   const [user, setUser] = useState(savedUser || null); // Guarda o nome e permissão do usuário logado
   const [formValues, setFormValues] = useState({}); // Guarda tudo que o usuário digita nos campos de data/CNPJ
   const [clientSearch, setClientSearch] = useState(''); // Guarda o que o usuário digita na lupa de clientes
@@ -89,7 +93,7 @@ export default function App() {
   // Fica observando a barra de pesquisa de clientes. Se tiver mais de 2 letras, vai no Python buscar no banco.
   useEffect(() => {
     if (clientSearch.length > 2) {
-      fetch(`http://192.168.2.189:3001/api/clientes?search=${clientSearch}`).then(r => r.json()).then(d => setDbClients(d));
+      fetch(`${API_BASE}/api/clientes?search=${clientSearch}`).then(r => r.json()).then(d => setDbClients(d));
     }
   }, [clientSearch]);
 
@@ -111,7 +115,7 @@ export default function App() {
     setIsLoading(true); // Liga a tela preta de carregamento
     try {
       // Faz o disparo (POST) dos dados preenchidos para a rota do Python que gera o Preview
-      const res = await fetch('http://192.168.2.189:3001/api/generate-base', {
+      const res = await fetch(`${API_BASE}/api/generate-base`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -145,7 +149,7 @@ export default function App() {
     const loadingToast = toast.loading("Extraindo base completa no servidor (Aguarde o processamento)...");
     try {
       // Chama a rota do Python que constrói o Excel no HD do servidor
-      const res = await fetch('http://192.168.2.189:3001/api/download-excel', {
+      const res = await fetch(`${API_BASE}/api/download-excel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -203,7 +207,7 @@ export default function App() {
     
     try {
         // Envia o usuário e senha pro Python validar no SQL Server
-        const res = await fetch('http://192.168.2.189:3001/api/login', {
+        const res = await fetch(`${API_BASE}/api/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -220,7 +224,7 @@ export default function App() {
             setUser(userData); 
             localStorage.setItem('omega_user', JSON.stringify(userData)); 
             
-            setView('dashboard'); // Libera a tela dos Módulos
+            setView('dashboard'); // Já escolheu o Gerador no hub
             toast.success(`Bem-vindo de volta, ${json.user.name}!`, { id: loadingToast });
         } else {
             toast.error(json.error, { id: loadingToast }); // Errou a senha
@@ -234,34 +238,132 @@ export default function App() {
   // RENDERIZAÇÃO VISUAL (O HTML estruturado com CSS do Tailwind)
   // ============================================================================
 
-  // SEÇÃO 1: TELA DE LOGIN (Só aparece se a variável 'view' for 'login')
+  const bgPulse = (
+    <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
+      <div className={`absolute top-[-10%] left-[-10%] w-[50vw] h-[50vw] rounded-full mix-blend-screen filter blur-[100px] opacity-40 animate-[pulse_6s_ease-in-out_infinite] ${darkMode ? 'bg-purple-900' : 'bg-purple-300'}`}></div>
+      <div className={`absolute bottom-[-10%] right-[-10%] w-[40vw] h-[40vw] rounded-full mix-blend-screen filter blur-[120px] opacity-30 animate-[pulse_8s_ease-in-out_infinite_1s] ${darkMode ? 'bg-pink-900' : 'bg-pink-300'}`}></div>
+    </div>
+  );
+
+  // HUB PÚBLICO (antes do login) — escolhe o módulo, depois autentica
+  if (view === 'hub') return (
+    <div className={`min-h-screen flex items-center justify-center p-6 font-mono relative overflow-hidden transition-colors duration-700 ${darkMode ? 'bg-[#0a0c10] text-white' : 'bg-slate-50 text-slate-900'}`}>
+      {bgPulse}
+      <Toaster position="top-right" toastOptions={{ style: { background: darkMode ? '#1e293b' : '#fff', color: darkMode ? '#fff' : '#000', border: '1px solid rgba(255,255,255,0.1)' } }} />
+      <div className="relative z-10 w-full max-w-4xl">
+        <div className="mb-10 flex flex-col items-center text-center">
+          <img src="/omega.png" className="mb-4 w-28 h-28" alt="Logo" />
+          <h1 className="text-3xl font-black italic uppercase tracking-tighter">
+            GET OMEGA <span className="text-purple-500">2.0</span>
+          </h1>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+          <button
+            type="button"
+            onClick={() => {
+              setSelectedProc(null);
+              setFormValues({});
+              setRegFilter('');
+              setView(user ? 'dashboard' : 'login');
+            }}
+            className={`p-10 rounded-[2.5rem] border text-left transition-all duration-300 group relative overflow-hidden backdrop-blur-sm
+              ${darkMode
+                ? 'bg-slate-900/40 border-white/10 hover:border-purple-500/50 hover:bg-slate-800/60 hover:shadow-[0_0_30px_-5px_rgba(168,85,247,0.15)]'
+                : 'bg-white/60 border-slate-200 shadow-xl hover:border-purple-400 hover:bg-white/90 hover:shadow-[0_0_30px_-5px_rgba(168,85,247,0.2)]'
+              }`}
+          >
+            <div className="mb-4 text-purple-500 group-hover:scale-110 transition-transform duration-300">
+              <Database size={36} />
+            </div>
+            <h3 className="text-2xl font-black mb-3 italic tracking-tight font-mono uppercase group-hover:text-purple-500 transition-colors">
+              Gerador de bases
+            </h3>
+            <p className="text-sm opacity-60 italic">
+              Bases SPED, XML, blocos e exportações Excel.
+            </p>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setView('ressarcimento')}
+            className={`p-10 rounded-[2.5rem] border text-left transition-all duration-300 group relative overflow-hidden backdrop-blur-sm
+              ${darkMode
+                ? 'bg-slate-900/40 border-white/10 hover:border-cyan-500/50 hover:bg-slate-800/60 hover:shadow-[0_0_30px_-5px_rgba(34,211,238,0.15)]'
+                : 'bg-white/60 border-slate-200 shadow-xl hover:border-cyan-400 hover:bg-white/90 hover:shadow-[0_0_30px_-5px_rgba(34,211,238,0.2)]'
+              }`}
+          >
+            <div className="mb-4 text-cyan-400 group-hover:scale-110 transition-transform duration-300">
+              <FileText size={36} />
+            </div>
+            <h3 className="text-2xl font-black mb-3 italic tracking-tight font-mono uppercase group-hover:text-cyan-400 transition-colors">
+              Ressarcimento IPI
+            </h3>
+            <p className="text-sm opacity-60 italic">
+              Fichas R11 / R12 / R13 — exportação TXT.
+            </p>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // MÓDULO RESSARCIMENTO (login + fichas) — mesma app, sem outra porta
+  if (view === 'ressarcimento') {
+    return (
+      <RessarcimentoModule
+        darkMode={darkMode}
+        onBackToHub={() => setView('hub')}
+      />
+    );
+  }
+
+  // LOGIN DO GERADOR (só depois de escolher o módulo)
   if (view === 'login') return (
     <div className={`min-h-screen flex items-center justify-center p-6 font-mono relative overflow-hidden transition-colors duration-700 ${darkMode ? 'bg-[#0a0c10]' : 'bg-slate-50'}`}>
-      {/* Efeitos de luz pulsante no fundo da tela */}
-      <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
-         <div className={`absolute top-[-10%] left-[-10%] w-[50vw] h-[50vw] rounded-full mix-blend-screen filter blur-[100px] opacity-40 animate-[pulse_6s_ease-in-out_infinite] ${darkMode ? 'bg-purple-900' : 'bg-purple-300'}`}></div>
-         <div className={`absolute bottom-[-10%] right-[-10%] w-[40vw] h-[40vw] rounded-full mix-blend-screen filter blur-[120px] opacity-30 animate-[pulse_8s_ease-in-out_infinite_1s] ${darkMode ? 'bg-pink-900' : 'bg-pink-300'}`}></div>
-      </div>
-      {/* Container das notificações */}
+      {bgPulse}
       <Toaster position="top-right" toastOptions={{ style: { background: darkMode ? '#1e293b' : '#fff', color: darkMode ? '#fff' : '#000', border: '1px solid rgba(255,255,255,0.1)' } }} />
       
-      {/* Caixa de vidro (Glassmorphism) onde ficam os campos de login */}
       <div className={`w-full max-w-md p-10 rounded-[3rem] border shadow-2xl relative z-10 backdrop-blur-xl transition-colors duration-500 ${darkMode ? 'bg-slate-900/60 border-white/10' : 'bg-white/80 border-white/40'}`}>
-         {/* Logo do Omega */}
+         <button
+           type="button"
+           onClick={() => setView('hub')}
+           className="mb-6 text-xs uppercase text-purple-500 font-black italic flex items-center gap-2 hover:text-purple-400 font-mono transition-colors"
+         >
+           <ArrowLeft size={16} /> Voltar ao hub
+         </button>
          <div className="flex justify-center mb-8"><img src="/omega.png" className="w-40 h-40" alt="Logo" /></div>
-       
-         {/* Formulário chamando a função handleLogin ao dar Enter/Clicar */}
+         <p className={`mb-6 text-center text-xs uppercase tracking-wider font-bold ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+           Login · Gerador de bases
+         </p>
          <form onSubmit={handleLogin} className="space-y-6">
             <input type="text" placeholder="Usuário (Login)" className={inputClass} value={analistaName} onChange={e => setAnalistaName(e.target.value)} required />
             <input type="password" placeholder="Senha" className={inputClass} value={password} onChange={e => setPassword(e.target.value)} required />
-            {/* Formatação do botão Entrar: cor de fundo gradiente, texto branco, cantos arredondados, sombra e efeito de zoom ao passar o mouse */}
             <button type="submit" className="w-full py-5 rounded-2xl bg-gradient-to-r from-purple-600 to-pink-500 text-white font-black uppercase shadow-xl hover:scale-[1.02] transition-transform">Entrar</button>
          </form>
       </div>
     </div>
   );
 
-  // SEÇÃO 2: SISTEMA PRINCIPAL (Aparece após o Login)
+  // Sem sessão no Gerador → tela de login
+  if (!user) return (
+    <div className={`min-h-screen flex items-center justify-center p-6 font-mono relative overflow-hidden transition-colors duration-700 ${darkMode ? 'bg-[#0a0c10]' : 'bg-slate-50'}`}>
+      {bgPulse}
+      <Toaster position="top-right" toastOptions={{ style: { background: darkMode ? '#1e293b' : '#fff', color: darkMode ? '#fff' : '#000', border: '1px solid rgba(255,255,255,0.1)' } }} />
+      <div className={`w-full max-w-md p-10 rounded-[3rem] border shadow-2xl relative z-10 backdrop-blur-xl ${darkMode ? 'bg-slate-900/60 border-white/10' : 'bg-white/80 border-white/40'}`}>
+        <button type="button" onClick={() => setView('hub')} className="mb-6 text-xs uppercase text-purple-500 font-black italic flex items-center gap-2 hover:text-purple-400 font-mono transition-colors">
+          <ArrowLeft size={16} /> Voltar ao hub
+        </button>
+        <p className="mb-4 text-center text-sm opacity-70">Sessão expirada. Faça login no Gerador.</p>
+        <form onSubmit={handleLogin} className="space-y-6">
+          <input type="text" placeholder="Usuário (Login)" className={inputClass} value={analistaName} onChange={e => setAnalistaName(e.target.value)} required />
+          <input type="password" placeholder="Senha" className={inputClass} value={password} onChange={e => setPassword(e.target.value)} required />
+          <button type="submit" className="w-full py-5 rounded-2xl bg-gradient-to-r from-purple-600 to-pink-500 text-white font-black uppercase shadow-xl hover:scale-[1.02] transition-transform">Entrar</button>
+        </form>
+      </div>
+    </div>
+  );
+
+  // SEÇÃO 2: SISTEMA PRINCIPAL (Aparece após o Login do Gerador)
   return (
     <div className={`min-h-screen flex flex-col transition-colors duration-700 relative overflow-hidden ${darkMode ? 'bg-[#0a0c10] text-white' : 'bg-slate-50 text-slate-900'}`}>
       {/* Luzes de fundo do sistema */}
@@ -276,7 +378,7 @@ export default function App() {
       {/* CABEÇALHO SUPERIOR (Header) com Logo, Tema e Logout */}
       <header className="px-8 py-4 border-b border-white/10 flex justify-between items-center backdrop-blur-2xl bg-white/5 sticky top-0 z-[100]">
         {/* Clique no Logo: Volta pro Dashboard e LIMPA OS CAMPOS (Poka-Yoke) */}
-        <div className="flex items-center gap-4 cursor-pointer" onClick={() => { setView('dashboard'); setSelectedProc(null); setFormValues({}); setRegFilter(''); }}>
+        <div className="flex items-center gap-4 cursor-pointer" onClick={() => { setView('hub'); setSelectedProc(null); setFormValues({}); setRegFilter(''); }}>
           <div className="p-1.5 rounded-2xl bg-gradient-to-br from-purple-600 to-pink-500 shadow-lg shadow-purple-500/20"><img src="/omega.png" className="w-10 h-10" alt="Logo" /></div>
           <h2 className="text-sm font-black italic uppercase font-mono tracking-tighter">GET OMEGA <span className="text-purple-500">2.0</span></h2>
         </div>
@@ -286,7 +388,7 @@ export default function App() {
            {/* Botão de Tema Claro/Escuro */}
            <button onClick={() => setDarkMode(!darkMode)} className={`p-2.5 rounded-xl transition-all ${darkMode ? 'hover:bg-white/10' : 'hover:bg-black/5'}`}>{darkMode ? <Sun size={20} className="text-yellow-400" /> : <Moon size={20} />}</button>
            {/* Botão de Sair: Destrói a sessão no cofre do navegador e volta pra tela de login */}
-           <button onClick={() => {localStorage.removeItem('omega_user');setUser(null);setView('login'); toast('Sessão encerrada.', { icon: '👋' }); }} className="p-3 hover:text-red-500 transition-colors"><LogOut size={20}/></button>
+           <button onClick={() => {localStorage.removeItem('omega_user');setUser(null);setView('hub'); toast('Sessão encerrada.', { icon: '👋' }); }} className="p-3 hover:text-red-500 transition-colors"><LogOut size={20}/></button>
         </div>
       </header>
 
@@ -307,10 +409,19 @@ export default function App() {
 
       {/* ÁREA CENTRAL DO SISTEMA */}
       <main className="p-8 max-w-7xl mx-auto w-full flex-1 relative z-10">
-        
+
         {/* TELA DE DASHBOARD: Desenha os Módulos */}
         {view === 'dashboard' ? (
           <div className="animate-in fade-in duration-500">
+            <div className="mb-6">
+              <button
+                type="button"
+                onClick={() => setView('hub')}
+                className="text-xs uppercase text-purple-500 font-black italic flex items-center gap-2 hover:text-purple-400 font-mono transition-colors"
+              >
+                <ArrowLeft size={16} /> Voltar ao hub
+              </button>
+            </div>
             <h1 className={`text-4xl font-black mb-10 italic uppercase font-mono tracking-tighter ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Selecione a base que deseja gerar:</h1>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                {/* Regra de Nível de Acesso: Filtra o card 'credito_gerado'. Ele só aparece se a permissão for 'alta' */}
