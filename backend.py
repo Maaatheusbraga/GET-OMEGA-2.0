@@ -589,8 +589,9 @@ async def get_clientes(req: Request, search: str = ""):
     conn.close()
     return res
 
+
 # ============================================================================
-# RESSARCIMENTO IPI (R11 / R12) — mesma API, mesmo processo
+# RESSARCIMENTO IPI (R11 / R12 / R13) — mesma API, mesmo processo
 # ============================================================================
 _PROCESS_STORE: dict = {}
 _PROCESS_LOCK = Lock()
@@ -635,6 +636,21 @@ def _ym_from_periodo(periodo) -> str:
     return digits
 
 
+def _yq_from_periodo(periodo) -> str:
+    """Código trimestral AAAATQ (ex.: 2026T2)."""
+    if isinstance(periodo, datetime):
+        y, m = periodo.year, periodo.month
+    elif isinstance(periodo, date):
+        y, m = periodo.year, periodo.month
+    else:
+        ym = _ym_from_periodo(periodo)
+        if len(ym) < 6:
+            return ""
+        y, m = int(ym[:4]), int(ym[4:6])
+    q = (m - 1) // 3 + 1
+    return f"{y}T{q}"
+
+
 def _fetch_txt_by_month(cursor, table: str, cliente_id: int, periodo_i: str, periodo_f: str):
     cursor.execute(
         f"""
@@ -657,6 +673,30 @@ def _fetch_txt_by_month(cursor, table: str, cliente_id: int, periodo_i: str, per
         if ym and line:
             by_month[ym].append(line)
     return by_month
+
+
+def _fetch_txt_by_quarter(cursor, table: str, cliente_id: int, periodo_i: str, periodo_f: str):
+    cursor.execute(
+        f"""
+        SELECT
+            CAST(periodo AS DATE) AS periodo,
+            ARQUIVO_TXT
+        FROM {table} WITH (NOLOCK)
+        WHERE id_cliente = ?
+          AND CAST(periodo AS DATE) BETWEEN ? AND ?
+          AND ARQUIVO_TXT IS NOT NULL
+          AND LTRIM(RTRIM(CAST(ARQUIVO_TXT AS NVARCHAR(4000)))) <> ''
+        ORDER BY CAST(periodo AS DATE)
+        """,
+        (cliente_id, periodo_i, periodo_f),
+    )
+    by_quarter: dict[str, list[str]] = defaultdict(list)
+    for periodo, arquivo_txt in cursor.fetchall():
+        yq = _yq_from_periodo(periodo)
+        line = str(arquivo_txt or "").rstrip("\r\n")
+        if yq and line:
+            by_quarter[yq].append(line)
+    return by_quarter
 
 
 def _append_mensal_files(files: list, file_map: dict, ficha: str, by_month: dict, empresa: str):
@@ -682,6 +722,30 @@ def _append_mensal_files(files: list, file_map: dict, ficha: str, by_month: dict
         )
 
 
+def _append_trimestral_files(files: list, file_map: dict, ficha: str, by_quarter: dict, empresa: str):
+    for yq in sorted(by_quarter.keys()):
+        lines = by_quarter[yq]
+        year, q = yq.split("T", 1)
+        file_id = f"{ficha}-{yq}"
+        file_name = f"FICHA {ficha} - {empresa} - {yq}.TXT"
+        file_map[file_id] = {
+            "ficha": ficha,
+            "periodoCode": yq,
+            "fileName": file_name,
+            "lines": lines,
+        }
+        files.append(
+            {
+                "id": file_id,
+                "ficha": ficha,
+                "periodoLabel": f"Trimestre {q}/{year}",
+                "periodoCode": yq,
+                "linhas": len(lines),
+                "fileName": file_name,
+            }
+        )
+
+
 @app.get("/api/health")
 async def health_check():
     return {"ok": True, "service": "GET OMEGA 2.0"}
@@ -689,7 +753,7 @@ async def health_check():
 
 @app.post("/api/processar")
 async def processar_ressarcimento(payload: dict, req: Request):
-    """R11 + R12: EXEC PROC_CARGA_R11 e lê TBL_R11 / TBL_R12 (mensal)."""
+    """R11/R12 mensal + R13 trimestral via PROC_CARGA_R11."""
     conn = None
     try:
         cliente_id = int(payload.get("id_cliente") or 0)
@@ -731,8 +795,11 @@ async def processar_ressarcimento(payload: dict, req: Request):
 
         r11_by_month = _fetch_txt_by_month(cursor, "TBL_R11", cliente_id, periodo_i, periodo_f)
         r12_by_month = _fetch_txt_by_month(cursor, "TBL_R12", cliente_id, periodo_i, periodo_f)
+        r13_by_quarter = _fetch_txt_by_quarter(cursor, "TBL_R13", cliente_id, periodo_i, periodo_f)
+
         _append_mensal_files(files, file_map, "R11", r11_by_month, empresa)
         _append_mensal_files(files, file_map, "R12", r12_by_month, empresa)
+        _append_trimestral_files(files, file_map, "R13", r13_by_quarter, empresa)
 
         with _PROCESS_LOCK:
             _PROCESS_STORE[process_id] = {
@@ -745,11 +812,12 @@ async def processar_ressarcimento(payload: dict, req: Request):
             }
 
         audit_log.info(
-            "PROCESSAR_RESSARC ok | process_id=%s | arquivos=%s | r11=%s | r12=%s",
+            "PROCESSAR_RESSARC ok | process_id=%s | arquivos=%s | r11=%s | r12=%s | r13=%s",
             process_id,
             len(files),
             len(r11_by_month),
             len(r12_by_month),
+            len(r13_by_quarter),
         )
 
         return {
@@ -758,7 +826,7 @@ async def processar_ressarcimento(payload: dict, req: Request):
             "files": files,
             "message": None
             if files
-            else "Processamento concluído, mas não há linhas R11/R12 no período.",
+            else "Processamento concluído, mas não há linhas R11/R12/R13 no período.",
         }
     except Exception as e:
         audit_log.exception("PROCESSAR_RESSARC falhou: %s", e)
@@ -803,7 +871,6 @@ async def download_txt_ressarcimento(process_id: str, file_id: str, req: Request
         media_type="text/plain; charset=iso-8859-1",
         headers=headers,
     )
-
 
 # Serve o frontend React (pasta dist/) na mesma porta da API — modo produção no servidor
 _DIST_DIR = Path(__file__).resolve().parent / "dist"

@@ -16,7 +16,7 @@ function loadSavedUser() {
 }
 
 /**
- * Módulo Ressarcimento IPI (R11/R12) — interno ao GET OMEGA.
+ * Módulo Ressarcimento IPI (R11/R12/R13) — interno ao GET OMEGA.
  * Login próprio; "Voltar ao hub" volta sem depender de outra porta.
  */
 export default function RessarcimentoModule({ darkMode = true, onBackToHub }) {
@@ -121,7 +121,7 @@ export default function RessarcimentoModule({ darkMode = true, onBackToHub }) {
       return;
     }
     setProcessing(true);
-    toast.loading('Processando R11/R12… isso pode demorar', { id: 'proc' });
+    toast.loading('Processando R11/R12/R13… isso pode demorar', { id: 'proc' });
     try {
       const res = await fetch(`${API_BASE}/api/processar`, {
         method: 'POST',
@@ -145,9 +145,9 @@ export default function RessarcimentoModule({ darkMode = true, onBackToHub }) {
       setSelectedIds(nextFiles.map((f) => f.id));
       setView('results');
       if (nextFiles.length === 0) {
-        toast.success(json.message || 'Sem linhas R11/R12 no período', { id: 'proc' });
+        toast.success(json.message || 'Sem linhas R11/R12/R13 no período', { id: 'proc' });
       } else {
-        toast.success(`${nextFiles.length} arquivo(s) prontos (R11/R12)`, { id: 'proc' });
+        toast.success(`${nextFiles.length} arquivo(s) prontos (R11/R12/R13)`, { id: 'proc' });
       }
     } catch {
       toast.error('Erro ao processar.', { id: 'proc' });
@@ -503,7 +503,7 @@ export default function RessarcimentoModule({ darkMode = true, onBackToHub }) {
                     darkMode ? 'border-white/10 bg-slate-900/40' : 'border-slate-200 bg-white/60'
                   }`}
                 >
-                  Nenhum arquivo R11/R12 gerado para este período.
+                  Nenhum arquivo R11/R12/R13 gerado para este período.
                 </li>
               )}
               {exports.map((item) => {
