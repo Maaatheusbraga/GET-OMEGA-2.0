@@ -148,6 +148,7 @@ export default function RessarcimentoModule({ darkMode = true, onBackToHub }) {
         toast.success(json.message || 'Sem linhas R11/R12/R13 no período', { id: 'proc' });
       } else {
         toast.success(`${nextFiles.length} arquivo(s) prontos (R11/R12/R13)`, { id: 'proc' });
+        if (json.message) toast.error(json.message, { id: 'proc-warn' });
       }
     } catch {
       toast.error('Erro ao processar.', { id: 'proc' });

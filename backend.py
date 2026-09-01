@@ -699,6 +699,58 @@ def _fetch_txt_by_quarter(cursor, table: str, cliente_id: int, periodo_i: str, p
     return by_quarter
 
 
+def _count_r13_rows(cursor, cliente_id: int, periodo_i: str, periodo_f: str) -> tuple[int, int]:
+    """Retorna (total_linhas, linhas_com_ARQUIVO_TXT) na TBL_R13."""
+    cursor.execute(
+        """
+        SELECT
+            COUNT(*) AS total,
+            SUM(
+                CASE
+                    WHEN ARQUIVO_TXT IS NOT NULL
+                     AND LTRIM(RTRIM(CAST(ARQUIVO_TXT AS NVARCHAR(4000)))) <> ''
+                    THEN 1 ELSE 0
+                END
+            ) AS com_txt
+        FROM TBL_R13 WITH (NOLOCK)
+        WHERE id_cliente = ?
+          AND CAST(periodo AS DATE) BETWEEN ? AND ?
+        """,
+        (cliente_id, periodo_i, periodo_f),
+    )
+    row = cursor.fetchone()
+    total = int(row[0] or 0)
+    com_txt = int(row[1] or 0)
+    return total, com_txt
+
+
+def _exec_proc_carga_r13(cursor, cliente_id: int, periodo_i: str, periodo_f: str):
+    cursor.execute(
+        "EXEC PROC_CARGA_R13 @p_cliente=?, @p_periodo_i=?, @p_periodo_f=?",
+        (cliente_id, periodo_i, periodo_f),
+    )
+    _drain_cursor(cursor)
+
+
+def _ensure_r13_arquivo_txt(cursor, cliente_id: int, periodo_i: str, periodo_f: str) -> tuple[int, int]:
+    """
+    Garante R13 com ARQUIVO_TXT preenchido.
+    A PROC_CARGA_R13 roda em execução top-level (fora da R11) e repete uma vez se necessário.
+    """
+    _exec_proc_carga_r13(cursor, cliente_id, periodo_i, periodo_f)
+    total, com_txt = _count_r13_rows(cursor, cliente_id, periodo_i, periodo_f)
+    if total > 0 and com_txt < total:
+        audit_log.warning(
+            "R13 incompleto apos 1a carga | cliente=%s | total=%s | com_txt=%s | reprocessando",
+            cliente_id,
+            total,
+            com_txt,
+        )
+        _exec_proc_carga_r13(cursor, cliente_id, periodo_i, periodo_f)
+        total, com_txt = _count_r13_rows(cursor, cliente_id, periodo_i, periodo_f)
+    return total, com_txt
+
+
 def _append_mensal_files(files: list, file_map: dict, ficha: str, by_month: dict, empresa: str):
     for ym in sorted(by_month.keys()):
         lines = by_month[ym]
@@ -753,7 +805,7 @@ async def health_check():
 
 @app.post("/api/processar")
 async def processar_ressarcimento(payload: dict, req: Request):
-    """R11/R12 mensal + R13 trimestral via PROC_CARGA_R11."""
+    """R11/R12 via PROC_CARGA_R11; R13 trimestral via PROC_CARGA_R13 (top-level + validação)."""
     conn = None
     try:
         cliente_id = int(payload.get("id_cliente") or 0)
@@ -788,6 +840,15 @@ async def processar_ressarcimento(payload: dict, req: Request):
         )
         _drain_cursor(cursor)
 
+        r13_total, r13_com_txt = _ensure_r13_arquivo_txt(cursor, cliente_id, periodo_i, periodo_f)
+        if r13_total > 0 and r13_com_txt < r13_total:
+            audit_log.error(
+                "R13 permanece incompleto | cliente=%s | total=%s | com_txt=%s",
+                cliente_id,
+                r13_total,
+                r13_com_txt,
+            )
+
         empresa = _safe_empresa_nome(nome_cliente)
         process_id = str(uuid.uuid4())
         files = []
@@ -812,21 +873,34 @@ async def processar_ressarcimento(payload: dict, req: Request):
             }
 
         audit_log.info(
-            "PROCESSAR_RESSARC ok | process_id=%s | arquivos=%s | r11=%s | r12=%s | r13=%s",
+            "PROCESSAR_RESSARC ok | process_id=%s | arquivos=%s | r11=%s | r12=%s | r13=%s | r13_linhas=%s | r13_sem_txt=%s",
             process_id,
             len(files),
             len(r11_by_month),
             len(r12_by_month),
             len(r13_by_quarter),
+            r13_total,
+            r13_total - r13_com_txt,
         )
+
+        r13_warning = None
+        if r13_total > 0 and r13_com_txt < r13_total:
+            r13_warning = (
+                f"R13 incompleto: {r13_com_txt} de {r13_total} linhas com TXT. "
+                "Contate o suporte se os arquivos R13 não aparecerem."
+            )
 
         return {
             "success": True,
             "processId": process_id,
             "files": files,
-            "message": None
-            if files
-            else "Processamento concluído, mas não há linhas R11/R12/R13 no período.",
+            "message": r13_warning
+            if r13_warning
+            else (
+                None
+                if files
+                else "Processamento concluído, mas não há linhas R11/R12/R13 no período."
+            ),
         }
     except Exception as e:
         audit_log.exception("PROCESSAR_RESSARC falhou: %s", e)
