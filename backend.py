@@ -138,7 +138,11 @@ def get_sql(pid, cli_id_int, dt_i, dt_f, cnpj, user, reg, xml_f):
     elif pid == 'efd_fiscal':
         sql_exec = f"EXEC PROC_GERAR_EFD_FISCAL_GERADOR {cli_id_int}, '{cnpj}', '{dt_i}', '{dt_f}', '{user}'"
     elif pid == 'efd_contribuicoes':
-        sql_exec = f"EXEC PROC_GER_EFD_CONTR_GERADOR {cli_id_int}, '{cnpj}', '{dt_i}', '{dt_f}', '{user}'"
+        # F550 não é gerado pela PROC_GER_EFD_CONTR_GERADOR — só pela PROC_REL_CONTRIBUICOES_GERADOR
+        if reg == 'F550':
+            sql_exec = f"EXEC PROC_REL_CONTRIBUICOES_GERADOR '{cnpj}', '{dt_i}', '{dt_f}', '{user}'"
+        else:
+            sql_exec = f"EXEC PROC_GER_EFD_CONTR_GERADOR {cli_id_int}, '{cnpj}', '{dt_i}', '{dt_f}', '{user}'"
         if reg: sql_select = f"SELECT * FROM TBL_EFD_CONT_{reg} WHERE ID_CLIENTE={cli_id_int} AND CAST(PERIODO AS DATE) BETWEEN '{dt_i}' AND '{dt_f}'"
     elif pid == 'efd_bloco_m':
         sql_exec = f"EXEC PROC_REL_CONTRIBUICOES_BLOCO_M_GERADOR '{cnpj}', '{dt_i}', '{dt_f}', '{user}'"
@@ -392,6 +396,8 @@ async def generate_base(payload: dict, req: Request):
     conn = None
     try:
         conn = pyodbc.connect(DB_CONFIG, autocommit=True)
+        # Mesma proteção do download: procs pesadas (ex.: F550 via REL_CONTRIBUICOES) não podem estourar timeout
+        conn.timeout = 0
         cursor = conn.cursor()
         
         p, pid, user, reg, xml_f = payload.get('params', {}), payload.get('procedureId', '').strip(), str(payload.get('userName', 'Analista')).replace("'", ""), payload.get('reg', '').strip(), payload.get('xmlFilters', {})
@@ -406,7 +412,12 @@ async def generate_base(payload: dict, req: Request):
 
         prefix, sql_exec, sql_select = get_sql(pid, cli_id_int, dt_i, dt_f, cnpj, user, reg, xml_f)
 
-        if sql_exec: cursor.execute(prefix + sql_exec)
+        if sql_exec:
+            cursor.execute(prefix + sql_exec)
+            # Só drena quando há SELECT separado depois.
+            # Bloco E / EFD Fiscal / IPI / Bloco M / Bloco D devolvem os dados no próprio EXEC.
+            if sql_select:
+                _drain_cursor(cursor)
         
         all_tables = []
         target = cursor.execute(sql_select) if sql_select else cursor
@@ -437,6 +448,7 @@ async def generate_base(payload: dict, req: Request):
 
         return {"success": True, "data": all_tables}
     except Exception as e:
+        audit_log.exception("PREVIEW | erro | modulo=%s | reg=%s", payload.get('procedureId', '').strip(), payload.get('reg', '').strip())
         return {"success": False, "error": str(e)}
     finally:
         if conn: conn.close()
@@ -463,7 +475,11 @@ async def download_excel(payload: dict, background_tasks: BackgroundTasks, req: 
         cnpj, cli_id_int = str(p.get('p_cnpj') or '').strip(), int(p.get('p_cliente') or p.get('id_cliente') or 0)
 
         prefix, sql_exec, sql_select = get_sql(pid, cli_id_int, dt_i, dt_f, cnpj, user, reg, xml_f)
-        if sql_exec: cursor.execute(prefix + sql_exec)
+        if sql_exec:
+            cursor.execute(prefix + sql_exec)
+            # Só drena quando há SELECT separado depois (mesmo critério do preview).
+            if sql_select:
+                _drain_cursor(cursor)
         target = cursor.execute(sql_select) if sql_select else cursor
 
         # Cria um arquivo temporário físico no servidor.
